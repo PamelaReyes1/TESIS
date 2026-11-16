@@ -4,7 +4,12 @@ const cors = require("cors");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const { spawn } = require("child_process");
+const {
+    analizarImagenRemota,
+    detallesPublicosIA,
+    respuestaRevisionManual,
+    estadoErrorInferencia
+} = require("./services/inferenceClient");
 const axios = require('axios');
 
 require("dotenv").config();
@@ -67,7 +72,17 @@ const storage = multer.diskStorage({
 
 
 const upload = multer({
-    storage: storage
+    storage: storage,
+    limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+    fileFilter: (_req, file, cb) => {
+        const tipos = new Set([
+            "image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff"
+        ]);
+        if (!tipos.has(file.mimetype)) {
+            return cb(new Error("Solo se permiten archivos de imagen compatibles"));
+        }
+        cb(null, true);
+    }
 });
 
 
@@ -293,257 +308,15 @@ function calcularRiesgo(
 // EJECUTAR MACHINE LEARNING
 // =====================================================
 
-function analizarImagen(
-    rutaImagen,
-    callback
-) {
-
-
-    // =================================================
-    // PYTHON
-    // =================================================
-
-    const rutaPython =
-        process.env.PYTHON_PATH || "python";
-
-
-    // =================================================
-    // SCRIPT PYTHON
-    // =================================================
-
-    const rutaScript =
-        process.env.SCRIPT_PATH ||
-        path.join(__dirname, "modelo", "predecir_imagen.py");
-
-
-    console.log(
-        "🤖 Ejecutando modelo de Machine Learning..."
-    );
-
-
-    // =================================================
-    // EJECUTAR PYTHON
-    // =================================================
-
-    const procesoPython = spawn(
-
-        rutaPython,
-
-        [
-            rutaScript,
-            rutaImagen
-        ]
-
-    );
-
-
-    let salidaPython = "";
-
-    let errorPython = "";
-
-
-    // =================================================
-    // SALIDA PYTHON
-    // =================================================
-
-    procesoPython.stdout.on(
-
-        "data",
-
-        (data) => {
-
-            const salida =
-                data.toString();
-
-            console.log(
-                "🐍 Python:",
-                salida
-            );
-
-            salidaPython += salida;
-
-        }
-
-    );
-
-
-    // =================================================
-    // ERROR PYTHON
-    // =================================================
-
-    procesoPython.stderr.on(
-
-        "data",
-
-        (data) => {
-
-            const error =
-                data.toString();
-
-            console.log(
-                "⚠️ Python error:",
-                error
-            );
-
-            errorPython += error;
-
-        }
-
-    );
-
-
-    // =================================================
-    // PYTHON FINALIZÓ
-    // =================================================
-
-    procesoPython.on(
-
-        "close",
-
-        (codigo) => {
-
-            console.log(
-                "🐍 Python terminó con código:",
-                codigo
-            );
-
-
-            if (codigo !== 0) {
-
-                return callback(
-
-                    new Error(
-                        errorPython ||
-                        "Error ejecutando el modelo"
-                    ),
-
-                    null
-
-                );
-
-            }
-
-
-            // =================================================
-            // EXTRAER CLASE
-            // =================================================
-
-            const resultadoClase =
-                salidaPython.match(
-                    /Diagnóstico:\s*(.+)/
-                );
-
-
-            // =================================================
-            // EXTRAER CONFIANZA GLOBAL
-            // =================================================
-
-            const resultadoConfianza =
-                salidaPython.match(
-                    /Confianza Analítica Global:\s*([\d.]+)%/
-                );
-
-
-            // =================================================
-            // VALIDAR
-            // =================================================
-
-            if (
-                !resultadoClase ||
-                !resultadoConfianza
-            ) {
-
-                console.log(
-                    "❌ No se pudo obtener el resultado del modelo"
-                );
-
-                console.log(
-                    "Salida completa:",
-                    salidaPython
-                );
-
-
-                return callback(
-
-                    new Error(
-                        "No se obtuvo una predicción válida"
-                    ),
-
-                    null
-
-                );
-
-            }
-
-
-            // =================================================
-            // ESTADO ORIGINAL DEL MODELO
-            // =================================================
-
-            const estadoUva = resultadoClase[1].trim().toLowerCase();
-            console.log("🍇 Estado detectado por Python:", estadoUva);
-
-
-            // =================================================
-            // CONFIANZA
-            // =================================================
-
-            const confianza = parseFloat(resultadoConfianza[1]);
-
-
-            // =================================================
-            // CONVERTIR A MYSQL USANDO LOS RANGOS DE ENUM
-            // ('Sana', 'Con deterioro', 'Podrida')
-            // =================================================
-
-            let resultadoBD;
-
-            // Extraer el porcentaje numérico del índice de afectación del texto de Python
-            const matchIndice = salidaPython.match(/Índice de Afectación del Racimo:\s*([\d.]+)%/);
-            const indiceAfectacion = matchIndice ? parseFloat(matchIndice[1]) : (estadoUva.includes("saludable") || estadoUva.includes("sano") ? 0.0 : 100.0);
-
-            if (indiceAfectacion <= 37.4) {
-                resultadoBD = "Sana";
-            } else if (indiceAfectacion < 51.0) {
-                resultadoBD = "Con deterioro";
-            } else {
-                resultadoBD = "Podrida";
-            }
-
-            console.log(
-                "🍇 Resultado para MySQL:",
-                resultadoBD,
-                `(${indiceAfectacion}% de daño)`
-            );
-
-
-            // =================================================
-            // DEVOLVER RESULTADO
-            // =================================================
-
-            callback(
-
-                null,
-
-                {
-
-                    estadoUva:
-                        estadoUva,
-
-                    resultadoBD:
-                        resultadoBD,
-
-                    confianza:
-                        confianza
-
-                }
-
-            );
-
-        }
-
-    );
-
+function analizarImagen(rutaImagen, callback) {
+    // FastAPI en Render se encarga de TensorFlow, GrabCut y CV.
+    // Esta interfaz callback preserva todas las rutas existentes.
+    analizarImagenRemota(rutaImagen)
+        .then(resultado => callback(null, resultado))
+        .catch(error => {
+            console.error("❌ Error consultando FastAPI:", error.code || error.message);
+            callback(error, null);
+        });
 }
 
 
@@ -618,7 +391,7 @@ app.post(
                     );
 
 
-                    return res.status(500).json({
+                    return res.status(estadoErrorInferencia(errorModelo)).json({
 
                         mensaje:
                             "La imagen se guardó, pero ocurrió un error al analizarla",
@@ -630,6 +403,16 @@ app.post(
 
                 }
 
+
+                // Revisión manual: la BD actual no tiene un estado pendiente.
+                // No insertar una clase provisional como si fuera definitiva.
+                if (resultadoModelo.estadoDecision === "revision_manual") {
+                    return res.status(202).json(respuestaRevisionManual(
+                        resultadoModelo,
+                        req.file.filename,
+                        `/imagenes/${req.file.filename}`
+                    ));
+                }
 
                 // =================================================
                 // RESULTADOS ML
@@ -880,7 +663,7 @@ app.post(
 
                                         id_imagen,
 
-                                        "Random Forest",
+                                        resultadoModelo.modelo,
 
                                         resultadoBD,
 
@@ -968,7 +751,9 @@ app.post(
                                                 confianza,
 
                                             modelo:
-                                                "Random Forest",
+                                                resultadoModelo.modelo,
+                                            ...detallesPublicosIA(resultadoModelo),
+                                            persistido: true,
 
                                             temperatura:
                                                 temperatura,
@@ -1061,10 +846,18 @@ app.post(
 
                 if (errorModelo) {
                     console.log("❌ Error del modelo:", errorModelo);
-                    return res.status(500).json({
+                    return res.status(estadoErrorInferencia(errorModelo)).json({
                         mensaje: "La imagen se guardó, pero ocurrió un error al analizarla",
                         error: errorModelo.message
                     });
+                }
+
+                if (resultadoModelo.estadoDecision === "revision_manual") {
+                    return res.status(202).json(respuestaRevisionManual(
+                        resultadoModelo,
+                        nombreArchivo,
+                        `/imagenes/${nombreArchivo}`
+                    ));
                 }
 
                 const resultadoBD = resultadoModelo.resultadoBD;
@@ -1167,7 +960,7 @@ app.post(
                                 sqlAnalisis,
                                 [
                                     id_imagen,
-                                    "Random Forest",
+                                    resultadoModelo.modelo,
                                     resultadoBD,
                                     confianza,
                                     riesgo
@@ -1194,7 +987,9 @@ app.post(
                                         estado_uva: resultadoBD,
                                         resultado: resultadoBD,
                                         confianza: confianza,
-                                        modelo: "Random Forest",
+                                        modelo: resultadoModelo.modelo,
+                                        ...detallesPublicosIA(resultadoModelo),
+                                        persistido: true,
                                         temperatura: temperatura,
                                         humedad: humedad,
                                         riesgo: riesgo,
@@ -1243,7 +1038,7 @@ app.post(
                 });
 
                 if (errML) {
-                    return res.status(500).json({
+                    return res.status(estadoErrorInferencia(errML)).json({
                         mensaje: "Error generando la inferencia de ML",
                         error: errML.message
                     });
@@ -1256,7 +1051,10 @@ app.post(
                     mensaje: "Inferencia generada exitosamente (sin guardar en BD ni disco)",
                     clase: resultadoML.estadoUva,
                     resultadoBD: resultadoML.resultadoBD,
-                    confianza: resultadoML.confianza
+                    confianza: resultadoML.confianza,
+                    modelo: resultadoML.modelo,
+                    persistido: false,
+                    ...detallesPublicosIA(resultadoML)
                 });
             });
         });
@@ -1816,10 +1614,18 @@ app.post('/capturar-esp32', async (req, res) => {
         analizarImagen(rutaImagenFisica, (errorModelo, resultadoModelo) => {
             if (errorModelo) {
                 console.log("❌ Error del modelo:", errorModelo);
-                return res.status(500).json({
+                return res.status(estadoErrorInferencia(errorModelo)).json({
                     mensaje: "Error analizando la imagen de ESP32",
                     error: errorModelo.message
                 });
+            }
+
+            if (resultadoModelo.estadoDecision === "revision_manual") {
+                return res.status(202).json(respuestaRevisionManual(
+                    resultadoModelo,
+                    nombreArchivo,
+                    `/imagenes/${nombreArchivo}`
+                ));
             }
 
             const resultadoBD = resultadoModelo.resultadoBD;
@@ -1870,7 +1676,7 @@ app.post('/capturar-esp32', async (req, res) => {
                         VALUES (?, ?, ?, ?, ?)
                     `;
 
-                    db.query(sqlAnalisis, [id_imagen, "Random Forest", resultadoBD, confianza, riesgo], (err) => {
+                    db.query(sqlAnalisis, [id_imagen, resultadoModelo.modelo, resultadoBD, confianza, riesgo], (err) => {
                         if (err) {
                             return res.status(500).json({ mensaje: "Error guardando análisis", error: err.message });
                         }
@@ -1880,7 +1686,10 @@ app.post('/capturar-esp32', async (req, res) => {
                             mensaje: "Imagen ESP32 capturada, analizada y registrada correctamente",
                             resultado: resultadoBD,
                             confianza: confianza,
-                            modelo: "Random Forest",
+                            modelo: resultadoModelo.modelo,
+                            ...detallesPublicosIA(resultadoModelo),
+                            estado_uva: resultadoBD,
+                            persistido: true,
                             riesgo: riesgo,
                             temperatura: temperatura,
                             humedad: humedad,
@@ -1901,4 +1710,16 @@ app.post('/capturar-esp32', async (req, res) => {
             error: error.message
         });
     }
+});
+
+// Errores de carga (Multer). Mantiene respuestas JSON para Ionic.
+app.use((error, _req, res, next) => {
+    if (error instanceof multer.MulterError) {
+        const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        return res.status(status).json({ mensaje: 'Imagen rechazada', error: error.message });
+    }
+    if (error && error.message === 'Solo se permiten archivos de imagen compatibles') {
+        return res.status(415).json({ mensaje: error.message });
+    }
+    next(error);
 });

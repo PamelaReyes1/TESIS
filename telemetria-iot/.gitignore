@@ -1,0 +1,16 @@
+# Credenciales y claves secretas
+.env
+.env.*
+!.env.example
+
+# Dependencias, caché y logs
+node_modules/
+*.log
+npm-debug.log*
+
+# Fotografías de usuarios (Render puede tener sistema de archivos efímero)
+imagenes/
+
+# Sistemas operativos
+.DS_Store
+Thumbs.db
