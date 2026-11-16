@@ -1,0 +1,3 @@
+FALTA: predecir_imagen.py y el modelo entrenado real.
+No se puede inventar un clasificador equivalente al entrenado.
+El script debe aceptar la ruta de imagen como primer argumento y emitir: Diagnóstico: ... y Confianza Analítica Global: NN% y, opcionalmente, Índice de Afectación del Racimo: NN%.

@@ -1,0 +1,682 @@
+<ion-header [translucent]="true">
+
+  <ion-toolbar>
+
+
+    <ion-title>
+      🍇 Telemetría IoT
+    </ion-title>
+
+
+  </ion-toolbar>
+
+</ion-header>
+
+<ion-content [fullscreen]="true">
+
+  <div class="contenedor">
+
+
+    <!-- ========================================== -->
+    <!-- ENCABEZADO -->
+    <!-- ========================================== -->
+
+    <div class="encabezado">
+
+      <h1>
+        🍇 PIAGPRA IoT
+      </h1>
+
+      <p>
+        Sistema inteligente de monitoreo ambiental y estimación de riesgo de pudrición
+      </p>
+
+
+      <div class="estado-sistema">
+
+        <span>
+          🟢
+        </span>
+
+        <div>
+
+          <small>
+            Estado del sistema
+          </small>
+
+          <strong>
+            Operativo
+          </strong>
+
+        </div>
+
+      </div>
+
+
+    </div>
+
+    <!-- ========================================== -->
+    <!-- TARJETAS DE RESUMEN -->
+    <!-- ========================================== -->
+
+    <div class="resumen-grid">
+
+
+      <!-- TEMPERATURA -->
+
+      <ion-card class="tarjeta-resumen">
+
+        <ion-card-content>
+
+          <div class="icono">
+            🌡️
+          </div>
+
+          <div>
+
+            <span class="titulo-dato">
+              Temperatura
+            </span>
+
+            <h2>
+
+              {{
+              ultimaMedicion?.temperatura
+              ?? '--'
+              }}
+
+              °C
+
+            </h2>
+
+          </div>
+
+        </ion-card-content>
+
+      </ion-card>
+
+
+      <!-- HUMEDAD -->
+
+      <ion-card class="tarjeta-resumen">
+
+        <ion-card-content>
+
+          <div class="icono">
+            💧
+          </div>
+
+          <div>
+
+            <span class="titulo-dato">
+              Humedad
+            </span>
+
+            <h2>
+
+              {{
+              ultimaMedicion?.humedad
+              ?? '--'
+              }}
+
+              %
+
+            </h2>
+
+          </div>
+
+        </ion-card-content>
+
+      </ion-card>
+
+
+    </div>
+
+
+    <!-- ========================================== -->
+    <!-- SECCIÓN DE ANÁLISIS -->
+    <!-- ========================================== -->
+
+    <ion-card class="tarjeta-analisis">
+
+      <ion-card-header>
+
+        <ion-card-title>
+          🔍 Análisis automático de riesgo
+        </ion-card-title>
+
+        <ion-card-subtitle>
+          Analiza una imagen de las uvas para estimar el riesgo de pudrición
+        </ion-card-subtitle>
+
+      </ion-card-header>
+
+
+      <ion-card-content>
+
+
+
+        <!-- BOTÓN CÁMARA ESP32-CAM -->
+        <ion-button expand="block" shape="round" color="success" (click)="capturarFotoESP32()" [disabled]="subiendo">
+          {{ subiendo ? '⏳ Capturando y analizando...' : '📷 Capturar foto desde ESP32-CAM' }}
+        </ion-button>
+        <!-- BOTÓN CÁMARA -->
+
+        <ion-button expand="block" shape="round" (click)="tomarFoto()">
+
+          📷 Tomar / Seleccionar foto
+
+        </ion-button>
+
+
+        <!-- SELECCIONAR ARCHIVO -->
+
+        <input class="selector-archivo" type="file" accept="image/*" (change)="seleccionarArchivo($event)">
+
+
+      </ion-card-content>
+
+    </ion-card>
+
+
+    <!-- ========================================== -->
+    <!-- VISTA PREVIA -->
+    <!-- ========================================== -->
+
+    <ion-card *ngIf="fotoSeleccionada" class="tarjeta-preview">
+
+
+      <ion-card-header>
+
+        <ion-card-title>
+          🖼️ Vista previa
+        </ion-card-title>
+
+      </ion-card-header>
+
+
+      <ion-card-content>
+
+
+        <!-- IMAGEN PREVIA -->
+
+        <div class="contenedor-imagen-preview">
+
+          <img [src]="fotoSeleccionada" alt="Foto seleccionada de uvas">
+
+        </div>
+
+        <!-- BOTÓN CÁMARA ESP32-CAM -->
+        <!-- BOTÓN SUBIR -->
+
+        <ion-button expand="block" shape="round" (click)="subirFoto()" [disabled]="!archivoSeleccionado || subiendo">
+
+          {{
+          subiendo
+          ? '⏳ Analizando imagen...'
+          : '⬆️ Analizar imagen'
+          }}
+
+        </ion-button>
+
+
+      </ion-card-content>
+
+    </ion-card>
+
+
+    <!-- ========================================== -->
+    <!-- RESULTADO DEL ÚLTIMO ANÁLISIS -->
+    <!-- ========================================== -->
+
+    <ion-card *ngIf="resultadoAnalisis" class="tarjeta-resultado">
+
+      <ion-card-header>
+
+        <ion-card-title>
+          🤖 Resultado del análisis
+        </ion-card-title>
+
+      </ion-card-header>
+
+
+      <ion-card-content>
+
+
+        <div class="resultado-principal">
+
+          <span class="resultado-icono">
+            🍇
+          </span>
+
+          <div>
+
+            <small>
+              Estado de la uva
+            </small>
+
+            <h2>
+              {{ resultadoAnalisis }}
+            </h2>
+
+          </div>
+
+        </div>
+
+
+        <!-- CONFIANZA -->
+
+        <div class="dato-resultado">
+
+          <span>
+            📊
+          </span>
+
+          <div>
+
+            <small>
+              Confianza del modelo
+            </small>
+
+            <strong>
+              {{ confianzaAnalisis ?? '--' }}%
+            </strong>
+
+
+
+          </div>
+
+        </div>
+
+
+        <!-- MODELO -->
+
+        <div class="dato-resultado">
+
+          <span>
+            🤖
+          </span>
+
+          <div>
+
+            <small>
+              Modelo utilizado
+            </small>
+
+            <strong>
+              {{ modeloAnalisis || '--' }}
+            </strong>
+
+          </div>
+
+        </div>
+
+
+        <!-- TEMPERATURA -->
+
+        <div class="dato-resultado">
+
+          <span>
+            🌡️
+          </span>
+
+          <div>
+
+            <small>
+              Temperatura
+            </small>
+
+            <strong>
+              {{ temperaturaAnalisis ?? ultimaMedicion?.temperatura ?? '--' }} °C
+            </strong>
+
+          </div>
+
+        </div>
+
+
+        <!-- HUMEDAD -->
+
+        <div class="dato-resultado">
+
+          <span>
+            💧
+          </span>
+
+          <div>
+
+            <small>
+              Humedad
+            </small>
+
+            <strong>
+              {{ humedadAnalisis ?? ultimaMedicion?.humedad ?? '--' }} %
+            </strong>
+
+          </div>
+
+        </div>
+
+
+        <!-- ========================================== -->
+        <!-- INDICADOR DE RIESGO -->
+        <!-- ========================================== -->
+
+        <div class="indicador-riesgo" [ngClass]="{
+        'riesgo-bajo': riesgoAnalisis === 'Bajo',
+        'riesgo-medio': riesgoAnalisis === 'Medio',
+        'riesgo-alto': riesgoAnalisis === 'Alto'
+      }">
+
+          <span class="riesgo-icono">
+
+            {{
+            riesgoAnalisis === 'Alto'
+            ? '🔴'
+            : riesgoAnalisis === 'Medio'
+            ? '🟡'
+            : '🟢'
+            }}
+
+          </span>
+
+
+          <div>
+
+            <small>
+              Riesgo estimado de pudrición
+            </small>
+
+            <h2>
+              {{ riesgoAnalisis || 'Pendiente' }}
+            </h2>
+
+          </div>
+
+        </div>
+
+
+      </ion-card-content>
+
+    </ion-card>
+
+
+    <!-- ========================================== -->
+    <!-- TÍTULO HISTORIAL -->
+    <!-- ========================================== -->
+
+    <div class="titulo-seccion">
+
+      <h2>
+        📊 Historial de monitoreo
+      </h2>
+
+      <p>
+        Últimas imágenes registradas y su estimación de riesgo
+      </p>
+
+    </div>
+
+
+    <!-- ========================================== -->
+    <!-- CARGANDO / SIN DATOS -->
+    <!-- ========================================== -->
+
+    <div *ngIf="imagenes.length === 0" class="mensaje-vacio">
+
+      <div class="icono-vacio">
+        🍇
+      </div>
+
+      <h3>
+        Cargando información
+      </h3>
+
+      <p>
+        Esperando datos del sistema...
+      </p>
+
+    </div>
+
+
+    <!-- ========================================== -->
+    <!-- LISTADO DE IMÁGENES -->
+    <!-- ========================================== -->
+
+    <ion-card *ngFor="let imagen of imagenes" class="tarjeta-imagen">
+
+
+      <!-- IMAGEN -->
+
+      <div class="imagen-contenedor">
+
+        <img [src]="telemetria.urlImagen(imagen.ruta_imagen)" alt="Imagen de uvas">
+
+      </div>
+
+
+      <!-- CABECERA -->
+
+      <ion-card-header>
+
+        <div class="cabecera-imagen">
+
+
+          <ion-card-title>
+
+            Imagen #{{ imagen.id_imagen }}
+
+          </ion-card-title>
+
+
+          <!-- ESTADO -->
+
+          <span class="estado" [class.pendiente]="!imagen.resultado">
+
+            {{
+            imagen.resultado
+            || 'Pendiente'
+            }}
+
+          </span>
+
+
+        </div>
+
+      </ion-card-header>
+
+
+      <!-- INFORMACIÓN -->
+
+      <ion-card-content>
+
+
+        <div class="datos-imagen">
+
+
+          <!-- TEMPERATURA -->
+
+          <div class="dato">
+
+            <span class="dato-icono">
+              🌡️
+            </span>
+
+            <div>
+
+              <small>
+                Temperatura
+              </small>
+
+              <strong>
+
+                {{
+                imagen.temperatura
+                ?? '--'
+                }}
+
+                °C
+
+              </strong>
+
+            </div>
+
+          </div>
+
+
+          <!-- HUMEDAD -->
+
+          <div class="dato">
+
+            <span class="dato-icono">
+              💧
+            </span>
+
+            <div>
+
+              <small>
+                Humedad
+              </small>
+
+              <strong>
+
+                {{
+                imagen.humedad
+                ?? '--'
+                }}
+
+                %
+
+              </strong>
+
+            </div>
+
+          </div>
+
+
+          <!-- RESULTADO -->
+
+          <div class="dato">
+
+            <span class="dato-icono">
+              🤖
+            </span>
+
+            <div>
+
+              <small>
+                Resultado
+              </small>
+
+              <strong>
+
+                {{
+                imagen.resultado
+                || 'Pendiente'
+                }}
+
+              </strong>
+
+            </div>
+
+          </div>
+
+
+          <!-- CONFIANZA -->
+
+          <div class="dato">
+
+            <span class="dato-icono">
+              📊
+            </span>
+
+            <div>
+
+              <small>
+                Confianza
+              </small>
+
+              <strong>
+
+                {{
+                imagen.confianza
+                ?? '--'
+                }}%
+
+              </strong>
+
+            </div>
+
+          </div>
+
+
+        </div>
+
+
+        <!-- ========================================== -->
+        <!-- RIESGO -->
+        <!-- ========================================== -->
+
+        <div *ngIf="imagen.riesgo" class="riesgo-historial" [ngClass]="{
+        'riesgo-bajo': imagen.riesgo === 'Bajo',
+        'riesgo-medio': imagen.riesgo === 'Medio',
+        'riesgo-alto': imagen.riesgo === 'Alto'
+      }">
+
+          <span>
+
+            {{
+            imagen.riesgo === 'Alto'
+            ? '🔴'
+            : imagen.riesgo === 'Medio'
+            ? '🟡'
+            : '🟢'
+            }}
+
+          </span>
+
+          <div>
+
+            <small>
+              Riesgo estimado
+            </small>
+
+            <strong>
+              {{ imagen.riesgo }}
+            </strong>
+
+          </div>
+
+        </div>
+
+
+        <!-- PENDIENTE -->
+
+        <div *ngIf="!imagen.riesgo" class="riesgo-pendiente">
+
+          ⚪ Riesgo pendiente de análisis
+
+        </div>
+
+
+        <!-- FECHA -->
+
+        <div class="fecha">
+
+          📅
+
+          {{
+          imagen.fecha_hora
+          || 'Sin fecha'
+          }}
+
+        </div>
+
+
+      </ion-card-content>
+
+    </ion-card>
+
+  </div>
+
+</ion-content>

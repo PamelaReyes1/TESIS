@@ -1,0 +1,36 @@
+# Secrets and local configuration
+.env
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+llaves.txt
+probar-mysql.js
+**/secrets/
+
+# Dependencies / outputs
+**/node_modules/
+**/www/
+**/dist/
+**/.angular/
+**/coverage/
+**/.venv/
+**/__pycache__/
+
+# Generated captures / local data
+**/Imagenes/
+**/uploads/
+*.db
+*.sqlite
+*.sqlite3
+
+# Large models (upload separately to private artifact storage)
+*.keras
+*.h5
+*.pkl
+*.pt
+*.onnx
+
+# Compressed source files
+*.zip

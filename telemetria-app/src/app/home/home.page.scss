@@ -1,0 +1,676 @@
+/* ===================================== */
+/* FONDO GENERAL */
+/* ===================================== */
+
+ion-content {
+  --background: #f3f6fa;
+}
+
+
+.contenedor {
+
+  padding: 25px;
+  max-width: 1200px;
+  margin: auto;
+
+}
+
+
+/* ===================================== */
+/* ENCABEZADO PRINCIPAL */
+/* ===================================== */
+
+
+.encabezado {
+
+  text-align:center;
+  margin-bottom:30px;
+
+  padding:35px;
+
+  border-radius:25px;
+
+  background:
+  linear-gradient(
+    135deg,
+    #2e7d32,
+    #66bb6a
+  );
+
+  color:white;
+
+  box-shadow:
+  0 10px 25px rgba(0,0,0,.15);
+
+}
+
+
+.encabezado h1 {
+
+  font-size:38px;
+  font-weight:800;
+  margin-bottom:10px;
+
+}
+
+
+.encabezado p {
+
+  font-size:17px;
+  opacity:.9;
+
+}
+
+
+
+/* ===================================== */
+/* ESTADO DEL SISTEMA */
+/* ===================================== */
+
+
+.estado-sistema {
+
+
+display:flex;
+
+justify-content:center;
+
+align-items:center;
+
+gap:15px;
+
+margin-top:20px;
+
+background:white;
+
+color:#333;
+
+padding:15px 30px;
+
+border-radius:20px;
+
+width:max-content;
+
+margin-left:auto;
+
+margin-right:auto;
+
+
+}
+
+
+.estado-sistema span {
+
+font-size:30px;
+
+}
+
+
+.estado-sistema small {
+
+display:block;
+
+color:#777;
+
+}
+
+
+
+/* ===================================== */
+/* TARJETAS GENERALES */
+/* ===================================== */
+
+
+ion-card {
+
+border-radius:22px;
+
+box-shadow:
+0 8px 25px rgba(0,0,0,.10);
+
+}
+
+
+
+ion-card-title {
+
+font-weight:800;
+
+}
+
+
+
+/* ===================================== */
+/* RESUMEN SENSORES */
+/* ===================================== */
+
+
+.resumen-grid {
+
+
+display:grid;
+
+grid-template-columns:
+repeat(2,1fr);
+
+gap:25px;
+
+margin-bottom:25px;
+
+
+}
+
+
+
+.tarjeta-resumen ion-card-content {
+
+
+display:flex;
+
+align-items:center;
+
+gap:25px;
+
+padding:30px;
+
+
+}
+
+
+
+.icono {
+
+font-size:55px;
+
+}
+
+
+
+.titulo-dato {
+
+color:#777;
+
+font-size:15px;
+
+}
+
+
+
+.tarjeta-resumen h2 {
+
+
+font-size:35px;
+
+margin:5px 0;
+
+font-weight:800;
+
+
+}
+
+
+
+/* ===================================== */
+/* INFORMACION DEL SISTEMA */
+/* ===================================== */
+
+
+.tarjeta-info {
+
+
+margin-bottom:30px;
+
+
+}
+
+
+
+.info-grid {
+
+
+display:grid;
+
+grid-template-columns:
+repeat(3,1fr);
+
+gap:20px;
+
+text-align:center;
+
+
+}
+
+
+.info-grid div {
+
+
+padding:20px;
+
+background:#f7f9fc;
+
+border-radius:18px;
+
+
+}
+
+
+.info-grid span {
+
+
+display:block;
+
+font-size:35px;
+
+
+}
+
+
+.info-grid small {
+
+
+display:block;
+
+color:#777;
+
+
+}
+
+
+.info-grid strong {
+
+
+font-size:18px;
+
+}
+
+
+
+/* ===================================== */
+/* ANALISIS IA */
+/* ===================================== */
+
+
+.tarjeta-analisis {
+
+
+margin-bottom:25px;
+
+
+}
+
+
+
+.selector-archivo {
+
+
+width:100%;
+
+padding:12px;
+
+border-radius:15px;
+
+background:white;
+
+
+}
+
+
+
+/* ===================================== */
+/* PREVIEW IMAGEN */
+/* ===================================== */
+
+
+.contenedor-imagen-preview {
+
+
+height:420px;
+
+background:white;
+
+border-radius:20px;
+
+overflow:hidden;
+
+
+}
+
+
+.contenedor-imagen-preview img {
+
+
+width:100%;
+
+height:100%;
+
+object-fit:contain;
+
+
+}
+
+
+
+/* ===================================== */
+/* RESULTADO IA */
+/* ===================================== */
+
+
+.tarjeta-resultado {
+
+
+border-left:
+
+8px solid #2e7d32;
+
+
+}
+
+
+
+.resultado-principal {
+
+
+display:flex;
+
+align-items:center;
+
+gap:20px;
+
+padding:25px;
+
+background:#f6faf6;
+
+border-radius:20px;
+
+
+}
+
+
+
+.resultado-icono {
+
+
+font-size:55px;
+
+
+}
+
+
+
+.resultado-principal h2 {
+
+
+font-size:32px;
+
+font-weight:800;
+
+
+}
+
+
+
+/* ===================================== */
+/* DATOS RESULTADO */
+/* ===================================== */
+
+
+.dato-resultado {
+
+
+display:flex;
+
+gap:15px;
+
+align-items:center;
+
+background:#f7f7f7;
+
+padding:18px;
+
+border-radius:15px;
+
+margin-top:12px;
+
+
+}
+
+
+
+.dato-resultado span {
+
+
+font-size:30px;
+
+
+}
+
+
+
+.dato-resultado small {
+
+
+display:block;
+
+color:#777;
+
+
+}
+
+
+
+.dato-resultado strong {
+
+
+font-size:20px;
+
+
+}
+
+
+
+ion-progress-bar {
+
+
+height:14px;
+
+border-radius:20px;
+
+margin-top:15px;
+
+
+}
+
+
+
+/* ===================================== */
+/* RIESGOS */
+/* ===================================== */
+
+
+.indicador-riesgo {
+
+
+display:flex;
+
+align-items:center;
+
+gap:20px;
+
+padding:25px;
+
+border-radius:20px;
+
+margin-top:20px;
+
+
+}
+
+
+
+.riesgo-icono {
+
+
+font-size:50px;
+
+
+}
+
+
+.riesgo-bajo {
+
+background:#e8f5e9;
+
+}
+
+
+.riesgo-medio {
+
+background:#fff8e1;
+
+}
+
+
+.riesgo-alto {
+
+background:#ffebee;
+
+}
+
+
+
+/* ===================================== */
+/* HISTORIAL */
+/* ===================================== */
+
+
+.titulo-seccion {
+
+
+margin:35px 0 20px;
+
+
+}
+
+
+.titulo-seccion h2 {
+
+
+font-size:28px;
+
+font-weight:800;
+
+
+}
+
+
+
+/* ===================================== */
+/* TARJETAS IMAGEN */
+/* ===================================== */
+
+
+.tarjeta-imagen {
+
+
+overflow:hidden;
+
+
+}
+
+
+
+.imagen-contenedor {
+
+
+height:350px;
+
+background:white;
+
+
+}
+
+
+
+.imagen-contenedor img {
+
+
+width:100%;
+
+height:100%;
+
+object-fit:contain;
+
+
+}
+
+
+
+.datos-imagen {
+
+
+display:grid;
+
+grid-template-columns:
+repeat(4,1fr);
+
+gap:15px;
+
+
+}
+
+
+
+.dato {
+
+
+background:#f7f7f7;
+
+padding:15px;
+
+border-radius:15px;
+
+
+}
+
+
+
+.dato-icono {
+
+
+font-size:30px;
+
+
+}
+
+
+
+/* ===================================== */
+/* RESPONSIVE */
+/* ===================================== */
+
+
+@media(max-width:900px){
+
+
+.resumen-grid{
+
+grid-template-columns:1fr;
+
+}
+
+
+.info-grid{
+
+grid-template-columns:1fr;
+
+}
+
+
+.datos-imagen{
+
+grid-template-columns:1fr;
+
+}
+
+
+}
