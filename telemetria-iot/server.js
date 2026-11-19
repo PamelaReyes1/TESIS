@@ -4,6 +4,9 @@ const cors = require("cors");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const { randomUUID } = require("node:crypto");
+const { detectarMime } = require("./services/inferenceClient");
+const { guardarDiagnostico, normalizarHistorial } = require("./services/diagnosticosRepository");
 const {
     analizarImagenRemota,
     detallesPublicosIA,
@@ -26,7 +29,7 @@ const origenesPermitidos = (process.env.FRONTEND_ORIGIN || '')
 app.use(cors({ origin: origenesPermitidos.length ? origenesPermitidos : false }));
 
 // La verificación de salud no depende de MySQL ni del modelo ML.
-app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+app.get('/health', (_req, res) => res.json({ status: 'ok', feature: 'diagnosticos_mysql_sin_sensor_v2' }));
 app.use(express.json());
 
 
@@ -62,7 +65,7 @@ const storage = multer.diskStorage({
     filename: (req, file, cb) => {
 
         const nombre =
-            `imagen-${Date.now()}${path.extname(file.originalname)}`;
+            `imagen-${Date.now()}-${randomUUID()}${path.extname(file.originalname)}`;
 
         cb(null, nombre);
 
@@ -97,10 +100,37 @@ const db = require("./db");
 // SERVIR IMÁGENES
 // =====================================================
 
-app.use(
-    "/imagenes",
-    express.static(carpetaImagenes)
-);
+// Fotografías persistidas en MariaDB; incluso tras reinicios de Render.
+app.get('/imagenes/db/:id', (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+        return res.status(400).json({ mensaje: 'Identificador de imagen inválido' });
+    }
+    db.query(
+        'SELECT contenido, tipo_mime FROM imagenes WHERE id_imagen = ? LIMIT 1',
+        [id],
+        (error, filas) => {
+            if (error) {
+                console.error('Error recuperando fotografía de MariaDB:', error.message);
+                return res.status(500).json({ mensaje: 'No se pudo recuperar la fotografía' });
+            }
+            if (!filas.length || !filas[0].contenido) {
+                return res.status(404).json({ mensaje: 'Fotografía no encontrada' });
+            }
+            const tipo = filas[0].tipo_mime;
+            if (!['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/tiff'].includes(tipo)) {
+                return res.status(500).json({ mensaje: 'Formato almacenado no válido' });
+            }
+            res.set('X-Content-Type-Options', 'nosniff');
+            res.set('Cache-Control', 'private, max-age=300');
+            res.type(tipo).send(filas[0].contenido);
+        }
+    );
+});
+
+// Compatibilidad con antiguas fotografías que sigan en disco.
+// redirect:false evita la redirección de /imagenes a /imagenes/.
+app.use('/imagenes', express.static(carpetaImagenes, { redirect: false }));
 
 
 // =====================================================
@@ -321,691 +351,92 @@ function analizarImagen(rutaImagen, callback) {
 
 
 // =====================================================
-// SUBIR IMAGEN DESDE IONIC
-// ANALIZAR Y GUARDAR
+// GUARDAR IMAGEN + DIAGNÓSTICO (SIN EXIGIR SENSORES)
 // =====================================================
-
-app.post(
-
-    "/imagenes-subir",
-
-    upload.single("imagen"),
-
-    (req, res) => {
-
-
-        // =================================================
-        // VALIDAR IMAGEN
-        // =================================================
-
-        if (!req.file) {
-
-            return res.status(400).json({
-
-                mensaje:
-                    "No se recibió ninguna imagen"
-
-            });
-
+async function procesarYGuardarImagen(rutaFisica, nombreArchivo, bytes) {
+    // Validación del contenido real, no solo la extensión del archivo.
+    const mime = detectarMime(bytes);
+    const resultadoIA = await analizarImagenRemota(rutaFisica);
+    const registro = await guardarDiagnostico(db, {
+        bytes,
+        mime,
+        resultadoIA,
+        calcularRiesgo,
+        asociarMedicion: process.env.ASOCIAR_MEDICION_IMAGEN === 'true'
+    });
+    const revision = resultadoIA.estadoDecision === 'revision_manual';
+    return {
+        status: revision ? 202 : 201,
+        body: {
+            success: true,
+            mensaje: revision
+                ? 'Fotografía y evaluación guardadas en MySQL; diagnóstico pendiente de revisión manual'
+                : 'Fotografía y diagnóstico guardados correctamente en MySQL',
+            id_imagen: registro.id_imagen,
+            id_analisis: registro.id_analisis,
+            id_medicion: registro.id_medicion,
+            estado_uva: revision ? null : resultadoIA.resultadoBD,
+            resultado: revision ? null : resultadoIA.resultadoBD,
+            confianza: resultadoIA.confianza,
+            modelo: resultadoIA.modelo,
+            riesgo: registro.riesgo,
+            temperatura: registro.temperatura,
+            humedad: registro.humedad,
+            persistido: true,
+            archivo: nombreArchivo,
+            ruta: registro.ruta,
+            ...detallesPublicosIA(resultadoIA),
         }
-
-
-        console.log(
-            "📸 Imagen recibida desde Ionic:",
-            req.file.filename
-        );
-
-
-        // =================================================
-        // RUTA FÍSICA
-        // =================================================
-
-        const rutaImagenFisica =
-            path.resolve(
-                req.file.path
-            );
-
-
-        console.log(
-            "📂 Ruta de imagen:",
-            rutaImagenFisica
-        );
-
-
-        // =================================================
-        // ANALIZAR IMAGEN
-        // =================================================
-
-        analizarImagen(
-
-            rutaImagenFisica,
-
-            (errorModelo, resultadoModelo) => {
-
-
-                if (errorModelo) {
-
-                    console.log(
-                        "❌ Error del modelo:",
-                        errorModelo
-                    );
-
-
-                    return res.status(estadoErrorInferencia(errorModelo)).json({
-
-                        mensaje:
-                            "La imagen se guardó, pero ocurrió un error al analizarla",
-
-                        error:
-                            errorModelo.message
-
-                    });
-
-                }
-
-
-                // Revisión manual: la BD actual no tiene un estado pendiente.
-                // No insertar una clase provisional como si fuera definitiva.
-                if (resultadoModelo.estadoDecision === "revision_manual") {
-                    return res.status(202).json(respuestaRevisionManual(
-                        resultadoModelo,
-                        req.file.filename,
-                        `/imagenes/${req.file.filename}`
-                    ));
-                }
-
-                // =================================================
-                // RESULTADOS ML
-                // =================================================
-
-                const resultadoBD =
-                    resultadoModelo.resultadoBD;
-
-
-                const confianza =
-                    resultadoModelo.confianza;
-
-
-                console.log(
-                    "🍇 Resultado para MySQL:",
-                    resultadoBD
-                );
-
-
-                // =================================================
-                // BUSCAR ÚLTIMA MEDICIÓN
-                // =================================================
-
-                const sqlMedicion = `
-
-                    SELECT
-                        id_medicion,
-                        temperatura,
-                        humedad
-
-                    FROM mediciones
-
-                    ORDER BY fecha_hora DESC
-
-                    LIMIT 1
-
-                `;
-
-
-                db.query(
-
-                    sqlMedicion,
-
-                    (err, resultadoMedicion) => {
-
-
-                        if (err) {
-
-                            console.log(
-                                "❌ Error buscando medición:",
-                                err
-                            );
-
-
-                            return res.status(500).json({
-
-                                mensaje:
-                                    "Error buscando última medición",
-
-                                error:
-                                    err.message
-
-                            });
-
-                        }
-
-
-                        if (
-                            resultadoMedicion.length === 0
-                        ) {
-
-                            return res.status(400).json({
-
-                                mensaje:
-                                    "La imagen se analizó, pero no existen mediciones"
-
-                            });
-
-                        }
-
-
-                        // =================================================
-                        // DATOS AMBIENTALES
-                        // =================================================
-
-                        const medicion =
-                            resultadoMedicion[0];
-
-
-                        const id_medicion =
-                            medicion.id_medicion;
-
-
-                        const temperatura =
-                            parseFloat(
-                                medicion.temperatura
-                            );
-
-
-                        const humedad =
-                            parseFloat(
-                                medicion.humedad
-                            );
-
-
-                        console.log(
-                            "🆔 ID medición:",
-                            id_medicion
-                        );
-
-
-                        console.log(
-                            "🌡️ Temperatura:",
-                            temperatura,
-                            "°C"
-                        );
-
-
-                        console.log(
-                            "💧 Humedad:",
-                            humedad,
-                            "%"
-                        );
-
-
-                        // =================================================
-                        // CALCULAR RIESGO
-                        // =================================================
-
-                        const riesgo =
-                            calcularRiesgo(
-
-                                temperatura,
-
-                                humedad,
-
-                                resultadoBD
-
-                            );
-
-
-                        // =================================================
-                        // RUTA DE IMAGEN
-                        // =================================================
-
-                        const rutaImagen =
-                            `/imagenes/${req.file.filename}`;
-
-
-                        // =================================================
-                        // INSERTAR IMAGEN
-                        // =================================================
-
-                        const sqlImagen = `
-
-                            INSERT INTO imagenes
-
-                            (
-                                id_medicion,
-                                ruta_imagen,
-                                estado_uva
-                            )
-
-                            VALUES (?, ?, ?)
-
-                        `;
-
-
-                        db.query(
-
-                            sqlImagen,
-
-                            [
-
-                                id_medicion,
-
-                                rutaImagen,
-
-                                resultadoBD
-
-                            ],
-
-                            (err, resultadoImagen) => {
-
-
-                                if (err) {
-
-                                    console.log(
-                                        "❌ Error guardando imagen:",
-                                        err
-                                    );
-
-
-                                    return res.status(500).json({
-
-                                        mensaje:
-                                            "Imagen analizada, pero no se pudo guardar",
-
-                                        error:
-                                            err.message
-
-                                    });
-
-                                }
-
-
-                                const id_imagen =
-                                    resultadoImagen.insertId;
-
-
-                                console.log(
-                                    "✅ Imagen registrada correctamente"
-                                );
-
-
-                                console.log(
-                                    "🆔 ID imagen:",
-                                    id_imagen
-                                );
-
-
-                                // =================================================
-                                // GUARDAR ANÁLISIS + RIESGO
-                                // =================================================
-
-                                const sqlAnalisis = `
-
-                                    INSERT INTO analisis_imagen
-
-                                    (
-                                        id_imagen,
-                                        modelo_cnn,
-                                        resultado,
-                                        confianza,
-                                        riesgo
-                                    )
-
-                                    VALUES (?, ?, ?, ?, ?)
-
-                                `;
-
-
-                                db.query(
-
-                                    sqlAnalisis,
-
-                                    [
-
-                                        id_imagen,
-
-                                        resultadoModelo.modelo,
-
-                                        resultadoBD,
-
-                                        confianza,
-
-                                        riesgo
-
-                                    ],
-
-                                    (err, resultadoAnalisis) => {
-
-
-                                        if (err) {
-
-                                            console.log(
-                                                "❌ Error guardando análisis:",
-                                                err
-                                            );
-
-
-                                            return res.status(500).json({
-
-                                                mensaje:
-                                                    "Imagen guardada, pero no se pudo guardar el análisis",
-
-                                                error:
-                                                    err.message
-
-                                            });
-
-                                        }
-
-
-                                        console.log(
-                                            "✅ Análisis guardado correctamente"
-                                        );
-
-
-                                        console.log(
-                                            "🆔 ID análisis:",
-                                            resultadoAnalisis.insertId
-                                        );
-
-
-                                        console.log(
-                                            "🍇 Resultado guardado:",
-                                            resultadoBD
-                                        );
-
-
-                                        console.log(
-                                            "📊 Confianza guardada:",
-                                            confianza
-                                        );
-
-
-                                        console.log(
-                                            "⚠️ Riesgo guardado:",
-                                            riesgo
-                                        );
-
-
-                                        // =================================================
-                                        // RESPUESTA A IONIC
-                                        // =================================================
-
-                                        return res.json({
-
-                                            mensaje:
-                                                "Imagen subida, analizada y registrada correctamente",
-
-                                            id_imagen:
-                                                id_imagen,
-
-                                            id_medicion:
-                                                id_medicion,
-
-                                            estado_uva:
-                                                resultadoBD,
-
-                                            resultado:
-                                                resultadoBD,
-
-                                            confianza:
-                                                confianza,
-
-                                            modelo:
-                                                resultadoModelo.modelo,
-                                            ...detallesPublicosIA(resultadoModelo),
-                                            persistido: true,
-
-                                            temperatura:
-                                                temperatura,
-
-                                            humedad:
-                                                humedad,
-
-                                            riesgo:
-                                                riesgo,
-
-                                            archivo:
-                                                req.file.filename,
-
-                                            ruta:
-                                                rutaImagen
-
-                                        });
-
-                                    }
-
-                                );
-
-                            }
-
-                        );
-
-                    }
-
-                );
-
-            }
-
-        );
-
-    }
-
-);
-
-
-// =====================================================
-// RECIBIR IMAGEN DESDE ESP32-CAM
-// =====================================================
-
-// =====================================================
-// RECIBIR IMAGEN DESDE ESP32-CAM CON ANÁLISIS COMPLETO
-// =====================================================
-
-app.post(
-    "/imagenes-directa",
-    express.raw({
-        type: "image/jpeg",
-        limit: "10mb"
-    }),
-    (req, res) => {
-
-        // =================================================
-        // VALIDAR IMAGEN
-        // =================================================
-        if (!req.body || req.body.length === 0) {
-            return res.status(400).json({
-                mensaje: "No se recibió ninguna imagen"
-            });
-        }
-
-        // =================================================
-        // NOMBRE Y RUTA DE ARCHIVO
-        // =================================================
-        const nombreArchivo = `imagen-${Date.now()}.jpg`;
-        const rutaArchivo = path.join(carpetaImagenes, nombreArchivo);
-
-        // =================================================
-        // GUARDAR ARCHIVO EN DISCO
-        // =================================================
-        fs.writeFile(rutaArchivo, req.body, (err) => {
-
-            if (err) {
-                console.log("❌ Error guardando imagen:", err);
-                return res.status(500).json({
-                    mensaje: "Error al guardar la imagen",
-                    error: err.message
-                });
-            }
-
-            console.log("📸 Imagen ESP32-CAM guardada en disco:", nombreArchivo);
-
-            // =================================================
-            // ANALIZAR IMAGEN CON ML
-            // =================================================
-            analizarImagen(rutaArchivo, (errorModelo, resultadoModelo) => {
-
-                if (errorModelo) {
-                    console.log("❌ Error del modelo:", errorModelo);
-                    return res.status(estadoErrorInferencia(errorModelo)).json({
-                        mensaje: "La imagen se guardó, pero ocurrió un error al analizarla",
-                        error: errorModelo.message
-                    });
-                }
-
-                if (resultadoModelo.estadoDecision === "revision_manual") {
-                    return res.status(202).json(respuestaRevisionManual(
-                        resultadoModelo,
-                        nombreArchivo,
-                        `/imagenes/${nombreArchivo}`
-                    ));
-                }
-
-                const resultadoBD = resultadoModelo.resultadoBD;
-                const confianza = resultadoModelo.confianza;
-
-                console.log("🍇 Resultado ML para ESP32-CAM:", resultadoBD);
-
-                // =================================================
-                // BUSCAR ÚLTIMA MEDICIÓN
-                // =================================================
-                const sqlMedicion = `
-                    SELECT
-                        id_medicion,
-                        temperatura,
-                        humedad
-                    FROM mediciones
-                    ORDER BY fecha_hora DESC
-                    LIMIT 1
-                `;
-
-                db.query(sqlMedicion, (err, resultadoMedicion) => {
-
-                    if (err) {
-                        console.log("❌ Error buscando medición:", err);
-                        return res.status(500).json({
-                            mensaje: "Error buscando última medición",
-                            error: err.message
-                        });
-                    }
-
-                    if (resultadoMedicion.length === 0) {
-                        return res.status(400).json({
-                            mensaje: "La imagen se analizó, pero no existen mediciones"
-                        });
-                    }
-
-                    // =================================================
-                    // DATOS AMBIENTALES
-                    // =================================================
-                    const medicion = resultadoMedicion[0];
-                    const id_medicion = medicion.id_medicion;
-                    const temperatura = parseFloat(medicion.temperatura);
-                    const humedad = parseFloat(medicion.humedad);
-
-                    // =================================================
-                    // CALCULAR RIESGO
-                    // =================================================
-                    const riesgo = calcularRiesgo(
-                        temperatura,
-                        humedad,
-                        resultadoBD
-                    );
-
-                    const rutaImagen = `/imagenes/${nombreArchivo}`;
-
-                    // =================================================
-                    // INSERTAR IMAGEN EN BD (CON ESTADO_UVA)
-                    // =================================================
-                    const sqlImagen = `
-                        INSERT INTO imagenes
-                        (
-                            id_medicion,
-                            ruta_imagen,
-                            estado_uva
-                        )
-                        VALUES (?, ?, ?)
-                    `;
-
-                    db.query(
-                        sqlImagen,
-                        [id_medicion, rutaImagen, resultadoBD],
-                        (err, resultadoImagen) => {
-
-                            if (err) {
-                                console.log("❌ Error guardando imagen:", err);
-                                return res.status(500).json({
-                                    mensaje: "Imagen analizada, pero no se pudo guardar en BD",
-                                    error: err.message
-                                });
-                            }
-
-                            const id_imagen = resultadoImagen.insertId;
-
-                            // =================================================
-                            // GUARDAR ANÁLISIS + RIESGO EN BD
-                            // =================================================
-                            const sqlAnalisis = `
-                                INSERT INTO analisis_imagen
-                                (
-                                    id_imagen,
-                                    modelo_cnn,
-                                    resultado,
-                                    confianza,
-                                    riesgo
-                                )
-                                VALUES (?, ?, ?, ?, ?)
-                            `;
-
-                            db.query(
-                                sqlAnalisis,
-                                [
-                                    id_imagen,
-                                    resultadoModelo.modelo,
-                                    resultadoBD,
-                                    confianza,
-                                    riesgo
-                                ],
-                                (err, resultadoAnalisis) => {
-
-                                    if (err) {
-                                        console.log("❌ Error guardando análisis:", err);
-                                        return res.status(500).json({
-                                            mensaje: "Imagen guardada, pero no se pudo guardar el análisis",
-                                            error: err.message
-                                        });
-                                    }
-
-                                    console.log("✅ Análisis ESP32-CAM completado y guardado correctamente");
-
-                                    // =================================================
-                                    // RESPUESTA CON DIAGNÓSTICO COMPLETO
-                                    // =================================================
-                                    return res.json({
-                                        mensaje: "Imagen ESP32-CAM subida, analizada y registrada correctamente",
-                                        id_imagen: id_imagen,
-                                        id_medicion: id_medicion,
-                                        estado_uva: resultadoBD,
-                                        resultado: resultadoBD,
-                                        confianza: confianza,
-                                        modelo: resultadoModelo.modelo,
-                                        ...detallesPublicosIA(resultadoModelo),
-                                        persistido: true,
-                                        temperatura: temperatura,
-                                        humedad: humedad,
-                                        riesgo: riesgo,
-                                        archivo: nombreArchivo,
-                                        ruta: rutaImagen
-                                    });
-                                }
-                            );
-                        }
-                    );
-                });
-            });
+    };
+}
+
+function responderErrorProcesamiento(res, error) {
+    if (error.name === 'InferenceError') {
+        return res.status(estadoErrorInferencia(error)).json({
+            mensaje: 'No se pudo analizar la fotografía',
+            error: error.message
         });
     }
-);
+    console.error('No se pudo guardar fotografía/diagnóstico en MariaDB:', error);
+    return res.status(500).json({
+        mensaje: 'No fue posible guardar la fotografía y su diagnóstico en MySQL',
+        ...(process.env.NODE_ENV === 'development' ? {error: error.message} : {})
+    });
+}
 
+// La subida Ionic utiliza multipart/form-data con campo "imagen".
+app.post('/imagenes-subir', upload.single('imagen'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ mensaje: 'No se recibió ninguna imagen' });
+    try {
+        const rutaFisica = path.resolve(req.file.path);
+        const bytes = await fs.promises.readFile(rutaFisica);
+        const respuesta = await procesarYGuardarImagen(rutaFisica, req.file.filename, bytes);
+        return res.status(respuesta.status).json(respuesta.body);
+    } catch (error) {
+        return responderErrorProcesamiento(res, error);
+    } finally {
+        // No dependemos del disco temporal de Render.
+        await fs.promises.unlink(req.file.path).catch(() => {});
+    }
+});
+
+// Compatibilidad con ESP32-CAM: JPEG binario sin multipart.
+app.post('/imagenes-directa', express.raw({ type: 'image/jpeg', limit: '8mb' }), async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) {
+        return res.status(400).json({ mensaje: 'No se recibió ninguna imagen JPEG' });
+    }
+    const nombreArchivo = `imagen-${Date.now()}-${randomUUID()}.jpg`;
+    const rutaFisica = path.join(carpetaImagenes, nombreArchivo);
+    try {
+        await fs.promises.writeFile(rutaFisica, req.body);
+        const respuesta = await procesarYGuardarImagen(rutaFisica, nombreArchivo, req.body);
+        return res.status(respuesta.status).json(respuesta.body);
+    } catch (error) {
+        return responderErrorProcesamiento(res, error);
+    } finally {
+        await fs.promises.unlink(rutaFisica).catch(() => {});
+    }
+});
 
 // =====================================================
 // GENERAR SOLO INFERENCIA DE ML (SIN GUARDAR EN BD NI DISCO)
@@ -1298,152 +729,31 @@ app.get(
 
 
 // =====================================================
-// CONSULTAR IMÁGENES
-// + MEDICIONES
-// + ANÁLISIS
-// + RIESGO GUARDADO
+// HISTORIAL DE FOTOGRAFÍAS Y DIAGNÓSTICOS
 // =====================================================
-
-app.get(
-
-    "/imagenes",
-
-    (req, res) => {
-
-
-        const sql = `
-
-            SELECT
-
-                i.id_imagen,
-
-                i.id_medicion,
-
-                i.ruta_imagen,
-
-                i.estado_uva,
-
-                i.fecha_hora,
-
-                m.temperatura,
-
-                m.humedad,
-
-                a.modelo_cnn,
-
-                a.resultado,
-
-                a.confianza,
-
-                a.riesgo,
-
-                a.fecha_hora AS fecha_analisis
-
-            FROM imagenes i
-
-            LEFT JOIN mediciones m
-
-                ON i.id_medicion =
-                   m.id_medicion
-
-            LEFT JOIN analisis_imagen a
-
-                ON i.id_imagen =
-                   a.id_imagen
-
-            ORDER BY
-                i.fecha_hora DESC
-
-            LIMIT 50
-
-        `;
-
-
-        db.query(
-
-            sql,
-
-            (err, resultados) => {
-
-
-                if (err) {
-
-                    console.log(
-                        "❌ Error consultando imágenes:",
-                        err
-                    );
-
-
-                    return res.status(500).json({
-
-                        mensaje:
-                            "Error consultando imágenes",
-
-                        error:
-                            err.message
-
-                    });
-
-                }
-
-
-                // =================================================
-                // LIMPIAR VALORES NULL
-                // =================================================
-
-                const datosFinales =
-                    resultados.map(
-
-                        (imagen) => {
-
-
-                            return {
-
-                                ...imagen,
-
-                                resultado:
-                                    imagen.resultado ||
-                                    imagen.estado_uva ||
-                                    "Pendiente",
-
-                                confianza:
-                                    imagen.confianza !== null
-                                        ? imagen.confianza
-                                        : null,
-
-                                riesgo:
-                                    imagen.riesgo ||
-                                    "Pendiente",
-
-                                modelo_cnn:
-                                    imagen.modelo_cnn ||
-                                    "Pendiente"
-
-                            };
-
-                        }
-
-                    );
-
-
-                console.log(
-                    "📸 Imágenes con análisis y riesgo enviadas:",
-                    datosFinales.length
-                );
-
-
-                return res.json(
-                    datosFinales
-                );
-
-            }
-
-        );
-
-    }
-
-);
-
+app.get('/imagenes', (_req, res) => {
+    const sql = `
+        SELECT i.id_imagen, i.id_medicion, i.ruta_imagen,
+               i.estado_uva, i.fecha_hora,
+               m.temperatura, m.humedad,
+               a.modelo_cnn, a.resultado, a.confianza, a.riesgo,
+               a.estado_decision, a.clase_propuesta,
+               a.motivos_revision, a.probabilidades_json,
+               a.fecha_hora AS fecha_analisis
+        FROM imagenes i
+        LEFT JOIN mediciones m ON i.id_medicion = m.id_medicion
+        LEFT JOIN analisis_imagen a ON i.id_imagen = a.id_imagen
+        ORDER BY i.fecha_hora DESC, i.id_imagen DESC
+        LIMIT 50
+    `;
+    db.query(sql, (error, filas) => {
+        if (error) {
+            console.error('Error consultando historial:', error.message);
+            return res.status(500).json({ mensaje: 'Error consultando el historial de diagnósticos' });
+        }
+        return res.json(filas.map(normalizarHistorial));
+    });
+});
 
 // =====================================================
 // OBTENER ÚLTIMA MEDICIÓN
@@ -1595,120 +905,27 @@ app.listen(
 
 const ESP32_CAM_IP = process.env.ESP32_IP || 'http://172.20.10.2/capture';
 
-app.post('/capturar-esp32', async (req, res) => {
+app.post('/capturar-esp32', async (_req, res) => {
+    let rutaFisica = null;
     try {
-        console.log('📸 Capturando imagen desde ESP32-CAM...');
-
-        // 1. Obtener imagen de la cámara ESP32-CAM
-        const response = await axios.get(ESP32_CAM_IP, { responseType: 'arraybuffer' });
-        const imageBuffer = Buffer.from(response.data);
-
-        // 2. Guardar imagen en disco local
-        const nombreArchivo = `imagen-${Date.now()}.jpg`;
-        const rutaArchivo = path.join(carpetaImagenes, nombreArchivo);
-        fs.writeFileSync(rutaArchivo, imageBuffer);
-
-        const rutaImagenFisica = path.resolve(rutaArchivo);
-
-        // 3. Ejecutar modelo de Machine Learning
-        analizarImagen(rutaImagenFisica, (errorModelo, resultadoModelo) => {
-            if (errorModelo) {
-                console.log("❌ Error del modelo:", errorModelo);
-                return res.status(estadoErrorInferencia(errorModelo)).json({
-                    mensaje: "Error analizando la imagen de ESP32",
-                    error: errorModelo.message
-                });
-            }
-
-            if (resultadoModelo.estadoDecision === "revision_manual") {
-                return res.status(202).json(respuestaRevisionManual(
-                    resultadoModelo,
-                    nombreArchivo,
-                    `/imagenes/${nombreArchivo}`
-                ));
-            }
-
-            const resultadoBD = resultadoModelo.resultadoBD;
-            const confianza = resultadoModelo.confianza;
-
-            // 4. Buscar última medición registrada
-            const sqlMedicion = `
-                SELECT id_medicion, temperatura, humedad 
-                FROM mediciones 
-                ORDER BY fecha_hora DESC 
-                LIMIT 1
-            `;
-
-            db.query(sqlMedicion, (err, resultadoMedicion) => {
-                if (err) {
-                    return res.status(500).json({ mensaje: "Error buscando última medición", error: err.message });
-                }
-
-                if (resultadoMedicion.length === 0) {
-                    return res.status(400).json({ mensaje: "No existen mediciones registradas" });
-                }
-
-                const medicion = resultadoMedicion[0];
-                const id_medicion = medicion.id_medicion;
-                const temperatura = parseFloat(medicion.temperatura);
-                const humedad = parseFloat(medicion.humedad);
-
-                // 5. Calcular nivel de riesgo ambiental
-                const riesgo = calcularRiesgo(temperatura, humedad, resultadoBD);
-                const rutaImagen = `/imagenes/${nombreArchivo}`;
-
-                // 6. Registrar en la tabla 'imagenes'
-                const sqlImagen = `
-                    INSERT INTO imagenes (id_medicion, ruta_imagen, estado_uva) 
-                    VALUES (?, ?, ?)
-                `;
-
-                db.query(sqlImagen, [id_medicion, rutaImagen, resultadoBD], (err, resultadoImagen) => {
-                    if (err) {
-                        return res.status(500).json({ mensaje: "Error guardando imagen", error: err.message });
-                    }
-
-                    const id_imagen = resultadoImagen.insertId;
-
-                    // 7. Registrar en la tabla 'analisis_imagen'
-                    const sqlAnalisis = `
-                        INSERT INTO analisis_imagen (id_imagen, modelo_cnn, resultado, confianza, riesgo) 
-                        VALUES (?, ?, ?, ?, ?)
-                    `;
-
-                    db.query(sqlAnalisis, [id_imagen, resultadoModelo.modelo, resultadoBD, confianza, riesgo], (err) => {
-                        if (err) {
-                            return res.status(500).json({ mensaje: "Error guardando análisis", error: err.message });
-                        }
-
-                        // 8. Respuesta JSON exacta requerida por tu frontend (subirFoto)
-                        return res.json({
-                            mensaje: "Imagen ESP32 capturada, analizada y registrada correctamente",
-                            resultado: resultadoBD,
-                            confianza: confianza,
-                            modelo: resultadoModelo.modelo,
-                            ...detallesPublicosIA(resultadoModelo),
-                            estado_uva: resultadoBD,
-                            persistido: true,
-                            riesgo: riesgo,
-                            temperatura: temperatura,
-                            humedad: humedad,
-                            id_imagen: id_imagen,
-                            id_medicion: id_medicion,
-                            archivo: nombreArchivo,
-                            ruta: rutaImagen
-                        });
-                    });
-                });
-            });
+        // El servidor de Render solo puede acceder a ESP32 si su dirección es enrutable.
+        const respuestaCamara = await axios.get(ESP32_CAM_IP, {
+            responseType: 'arraybuffer',
+            timeout: 15000,
+            maxContentLength: 8 * 1024 * 1024
         });
-
+        const bytes = Buffer.from(respuestaCamara.data);
+        const nombreArchivo = `imagen-${Date.now()}-${randomUUID()}.jpg`;
+        rutaFisica = path.join(carpetaImagenes, nombreArchivo);
+        await fs.promises.writeFile(rutaFisica, bytes);
+        const respuesta = await procesarYGuardarImagen(rutaFisica, nombreArchivo, bytes);
+        return res.status(respuesta.status).json(respuesta.body);
     } catch (error) {
-        console.error('❌ Error obteniendo captura de ESP32:', error.message);
-        return res.status(500).json({
-            mensaje: 'Error conectando con la ESP32-CAM',
-            error: error.message
-        });
+        if (error.name === 'InferenceError') return responderErrorProcesamiento(res, error);
+        console.error('No se pudo capturar/guardar desde ESP32-CAM:', error.message);
+        return res.status(502).json({ mensaje: 'No fue posible obtener o guardar la fotografía desde ESP32-CAM' });
+    } finally {
+        if (rutaFisica) await fs.promises.unlink(rutaFisica).catch(() => {});
     }
 });
 

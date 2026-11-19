@@ -269,10 +269,11 @@
         </div>
 
 
-        <!-- HTTP 202: resultado null y revisión manual requerida. -->
+        <!-- HTTP 202: fotografía guardada, sin diagnóstico definitivo. -->
         <div *ngIf="estadoDecision === 'revision_manual'" class="aviso-inferencia aviso-inferencia-revision" role="status">
           <strong>⚠️ Clasificación no concluyente</strong>
-          <p>La imagen requiere revisión manual. No se registró un diagnóstico definitivo en MySQL.</p>
+          <p *ngIf="persistidoAnalisis">La fotografía y el análisis están guardados en el historial. El diagnóstico sigue pendiente de revisión.</p>
+          <p *ngIf="!persistidoAnalisis">La fotografía requiere revisión manual. No existe un diagnóstico confirmado.</p>
           <p *ngIf="clasePropuesta">Clase propuesta: <strong>{{ clasePropuesta }}</strong>.</p>
         </div>
 
@@ -422,11 +423,11 @@
     <div class="titulo-seccion">
 
       <h2>
-        📊 Historial de monitoreo
+        📷 Historial de diagnósticos
       </h2>
 
       <p>
-        Últimas imágenes registradas y su estimación de riesgo
+        Fotografías analizadas y guardadas, incluso las que requieren revisión manual
       </p>
 
     </div>
@@ -443,11 +444,11 @@
       </div>
 
       <h3>
-        Cargando información
+        Sin fotografías registradas
       </h3>
 
       <p>
-        Esperando datos del sistema...
+        Sube una fotografía para ver su diagnóstico aquí.
       </p>
 
     </div>
@@ -485,7 +486,7 @@
 
           <!-- ESTADO -->
 
-          <span class="estado" [class.pendiente]="!imagen.resultado">
+          <span class="estado" [class.pendiente]="imagen.estado_decision === 'revision_manual' || !imagen.resultado">
 
             {{
             imagen.resultado
@@ -504,13 +505,19 @@
 
       <ion-card-content>
 
+        <div *ngIf="imagen.estado_decision === 'revision_manual'" class="aviso-inferencia aviso-inferencia-revision" role="status">
+          <strong>⚠️ Revisión manual</strong>
+          <p>La imagen se guardó. El diagnóstico todavía no es definitivo.</p>
+          <p *ngIf="imagen.clase_propuesta">Clase propuesta por la IA: <strong>{{ imagen.clase_propuesta }}</strong>.</p>
+        </div>
+
 
         <div class="datos-imagen">
 
 
           <!-- TEMPERATURA -->
 
-          <div class="dato">
+          <div class="dato" *ngIf="imagen.temperatura != null">
 
             <span class="dato-icono">
               🌡️
@@ -540,7 +547,7 @@
 
           <!-- HUMEDAD -->
 
-          <div class="dato">
+          <div class="dato" *ngIf="imagen.humedad != null">
 
             <span class="dato-icono">
               💧
@@ -668,7 +675,7 @@
 
         <div *ngIf="!imagen.riesgo" class="riesgo-pendiente">
 
-          ⚪ Riesgo pendiente de análisis
+          ⚪ Riesgo ambiental no estimado (sin sensor conectado)
 
         </div>
 

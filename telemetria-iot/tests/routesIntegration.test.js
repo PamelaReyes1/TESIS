@@ -3,13 +3,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
 const path = require('node:path');
+const fs = require('node:fs/promises');
+const os = require('node:os');
 
-function prepararServidorSimulado(resultadoRemoto) {
+function prepararServidorSimulado(resultadoIA) {
   const routes = new Map();
-  const queries = [];
+  const guardados = [];
   const app = {
-    get: (ruta, ...h) => routes.set(`GET ${ruta}`, h.at(-1)),
-    post: (ruta, ...h) => routes.set(`POST ${ruta}`, h.at(-1)),
+    get: (ruta, ...handlers) => routes.set(`GET ${ruta}`, handlers.at(-1)),
+    post: (ruta, ...handlers) => routes.set(`POST ${ruta}`, handlers.at(-1)),
     use: () => {},
     listen: () => ({ on: () => {} }),
   };
@@ -17,42 +19,48 @@ function prepararServidorSimulado(resultadoRemoto) {
   express.json = () => (_req, _res, next) => next();
   express.raw = () => (_req, _res, next) => next();
   express.static = () => (_req, _res, next) => next();
-  const multer = () => ({single: () => (_req, _res, next) => next()});
+  const multer = () => ({ single: () => (_req, _res, next) => next() });
   multer.diskStorage = () => ({});
   multer.MulterError = class MulterError extends Error {};
   const db = {
     query: (sql, params, callback) => {
       if (typeof params === 'function') callback = params;
-      queries.push(sql.trim());
-      if (/FROM mediciones/.test(sql)) return callback(null, [{id_medicion: 7, temperatura: 23, humedad: 62}]);
-      if (/INSERT INTO imagenes/.test(sql)) return callback(null, {insertId: 12});
-      if (/INSERT INTO analisis_imagen/.test(sql)) return callback(null, {insertId: 15});
-      throw new Error('Consulta inesperada en test: ' + sql);
+      if (sql.includes('FROM imagenes i')) return callback(null, []);
+      if (sql.includes('SELECT contenido, tipo_mime')) return callback(null, []);
+      return callback(null, []);
     },
   };
-  const dependencies = {
-    express, mysql2: {}, cors: () => (_req, _res, next) => next(),
-    multer, axios: {get: async () => ({data: Buffer.from('image')})},
-    dotenv: {config: () => {}}, './db': db,
+  const deps = {
+    express,
+    mysql2: {},
+    cors: () => (_req, _res, next) => next(),
+    multer,
+    axios: { get: async () => ({ data: Buffer.from([255,216,255]) }) },
+    dotenv: { config: () => {} },
+    './db': db,
     './services/inferenceClient': {
-      analizarImagenRemota: async () => resultadoRemoto,
+      analizarImagenRemota: async () => resultadoIA,
+      detectarMime: () => 'image/jpeg',
       detallesPublicosIA: resultado => ({
         clase_propuesta: resultado.clasePropuesta,
         estado_decision: resultado.estadoDecision,
       }),
-      respuestaRevisionManual: resultado => ({
-        mensaje: 'Revisión manual', estado_uva: null,
-        resultado: null, persistido: false,
-        clase_propuesta: resultado.clasePropuesta,
-      }),
+      respuestaRevisionManual: () => ({}),
       estadoErrorInferencia: error => error.statusCode || 502,
+    },
+    './services/diagnosticosRepository': {
+      guardarDiagnostico: async (_db, payload) => {
+        guardados.push(payload);
+        return { id_imagen: 12, id_analisis: 13, id_medicion: null, ruta: '/imagenes/db/12', riesgo: null, temperatura: null, humedad: null };
+      },
+      normalizarHistorial: fila => fila,
     },
   };
   const modPath = path.resolve(__dirname, '../server.js');
   const originalLoad = Module._load;
   Module._load = function (id, parent, main) {
-    if (parent && parent.filename === modPath && Object.prototype.hasOwnProperty.call(dependencies, id)) {
-      return dependencies[id];
+    if (parent && parent.filename === modPath && Object.prototype.hasOwnProperty.call(deps, id)) {
+      return deps[id];
     }
     return originalLoad.call(this, id, parent, main);
   };
@@ -63,49 +71,66 @@ function prepararServidorSimulado(resultadoRemoto) {
     Module._load = originalLoad;
     delete require.cache[modPath];
   }
-  return {routes, queries};
+  return { routes, guardados };
 }
 
-async function invocar(handler) {
+function invocar(handler, req) {
   return new Promise((resolve, reject) => {
-    const req = {file: {filename: 'imagen-prueba.jpg', path: '/tmp/imagen-prueba.jpg'}};
     const res = {
       statusCode: 200,
       status(code) { this.statusCode = code; return this; },
-      json(body) { resolve({status: this.statusCode, body}); return this; },
-      send(body) { resolve({status: this.statusCode, body}); return this; },
+      json(body) { resolve({ status:this.statusCode, body }); return this; },
+      send(body) { resolve({ status:this.statusCode, body }); return this; },
     };
-    try { handler(req, res); } catch (e) { reject(e); }
+    Promise.resolve(handler(req, res)).catch(reject);
   });
 }
 
-test('imagenes-subir: revisión manual devuelve 202 sin escribir en MySQL', async () => {
-  const {routes, queries} = prepararServidorSimulado({
-    estadoDecision: 'revision_manual', clasePropuesta: 'Pudricion leve',
-    resultadoBD: null, confianza: 62, modelo: 'ResNet50',
-  });
-  assert.ok(routes.has('POST /imagenes-subir'));
-  assert.ok(routes.has('POST /imagenes-directa'));
-  assert.ok(routes.has('POST /inferencia'));
-  assert.ok(routes.has('POST /capturar-esp32'));
-  const respuesta = await invocar(routes.get('POST /imagenes-subir'));
-  assert.equal(respuesta.status, 202);
-  assert.equal(respuesta.body.persistido, false);
-  assert.equal(respuesta.body.resultado, null);
-  assert.equal(queries.length, 0);
+const ia = {
+  estadoDecision:'revision_manual', clasePropuesta:'Sano', resultadoBD:null,
+  confianza:50.24, modelo:'EfficientNetB0',
+};
+
+test('upload revisable: HTTP 202 pero sí guarda imagen+análisis sin sensor', async () => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'uvas-test-'));
+  const filename = path.join(folder, 'imagen.jpg');
+  try {
+    await fs.writeFile(filename, Buffer.from([255,216,255,12]));
+    const { routes, guardados } = prepararServidorSimulado(ia);
+    assert.ok(routes.has('POST /imagenes-subir'));
+    assert.ok(routes.has('GET /imagenes'));
+    assert.ok(routes.has('GET /imagenes/db/:id'));
+    const result = await invocar(routes.get('POST /imagenes-subir'), {
+      file:{filename:'imagen.jpg',path:filename}
+    });
+    assert.equal(result.status, 202);
+    assert.equal(result.body.persistido, true);
+    assert.equal(result.body.id_imagen, 12);
+    assert.equal(result.body.ruta, '/imagenes/db/12');
+    assert.equal(result.body.estado_decision, 'revision_manual');
+    assert.equal(result.body.resultado, null);
+    assert.equal(guardados.length, 1);
+    assert.equal(guardados[0].resultadoIA.estadoDecision, 'revision_manual');
+    await assert.rejects(fs.stat(filename), /ENOENT/); // borrada del disco
+  } finally {
+    await fs.rm(folder, {recursive:true,force:true});
+  }
 });
 
-test('imagenes-subir: clasificacion aceptada conserva inserciones y modelo real', async () => {
-  const {routes, queries} = prepararServidorSimulado({
-    estadoDecision: 'aceptada', clasePropuesta: 'Sano',
-    resultadoBD: 'Sana', confianza: 89.3, modelo: 'MobileNetV2',
-  });
-  const respuesta = await invocar(routes.get('POST /imagenes-subir'));
-  assert.equal(respuesta.status, 200);
-  assert.equal(respuesta.body.id_imagen, 12);
-  assert.equal(respuesta.body.resultado, 'Sana');
-  assert.equal(respuesta.body.modelo, 'MobileNetV2');
-  assert.equal(respuesta.body.confianza, 89.3);
-  assert.equal(respuesta.body.persistido, true);
-  assert.equal(queries.length, 3);
+test('upload aceptado: HTTP 201 y fotografía persistida sin datos de sensores', async () => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'uvas-test-'));
+  const filename = path.join(folder, 'imagen.jpg');
+  try {
+    await fs.writeFile(filename, Buffer.from([255,216,255,12]));
+    const { routes } = prepararServidorSimulado({...ia, estadoDecision:'aceptada', resultadoBD:'Sana'});
+    const result = await invocar(routes.get('POST /imagenes-subir'), {
+      file:{filename:'imagen.jpg',path:filename}
+    });
+    assert.equal(result.status, 201);
+    assert.equal(result.body.resultado, 'Sana');
+    assert.equal(result.body.id_medicion, null);
+    assert.equal(result.body.persistido, true);
+  } finally {
+    await fs.rm(folder, {recursive:true,force:true});
+  }
 });
