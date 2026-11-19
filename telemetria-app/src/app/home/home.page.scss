@@ -674,3 +674,22 @@ grid-template-columns:1fr;
 
 
 }
+/* Avisos de inferencia remota, integrados con el diseño existente. */
+.aviso-inferencia {
+  padding: 14px 16px;
+  border-radius: 12px;
+  margin: 14px 0;
+  font-size: 0.94rem;
+  line-height: 1.5;
+}
+.aviso-inferencia p { margin: 6px 0 0; }
+.aviso-inferencia-revision {
+  background: #fff8e6;
+  color: #704c0b;
+  border: 1px solid #ead29a;
+}
+.aviso-inferencia-error {
+  background: #fff1f1;
+  color: #8a1c1c;
+  border: 1px solid #e4aaaa;
+}

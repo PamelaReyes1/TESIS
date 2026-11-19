@@ -78,6 +78,13 @@ export class HomePage implements OnInit, OnDestroy {
 
   riesgoAnalisis: string | undefined;
 
+  // Respuesta de la IA: "revision_manual" no es un diagnóstico confirmado.
+  estadoDecision: string | undefined;
+  clasePropuesta: string | undefined;
+  mensajeAnalisis: string | undefined;
+  errorAnalisis: string | undefined;
+  persistidoAnalisis: boolean | undefined;
+
   // ==========================================
   // TEMPERATURA Y HUMEDAD DEL ANÁLISIS
   // ==========================================
@@ -451,6 +458,47 @@ export class HomePage implements OnInit, OnDestroy {
   }
 
   // ==========================================
+  // NORMALIZAR RESPUESTA NODE.JS / FASTAPI
+  // ==========================================
+
+  private aplicarResultadoAnalisis(respuesta: any): void {
+    const requiereRevision = respuesta?.estado_decision === 'revision_manual';
+
+    this.estadoDecision = respuesta?.estado_decision ?? undefined;
+    this.clasePropuesta = respuesta?.clase_propuesta ?? undefined;
+    this.persistidoAnalisis = respuesta?.persistido === true;
+    this.errorAnalisis = undefined;
+    this.mensajeAnalisis = respuesta?.mensaje ?? undefined;
+
+    // En HTTP 202, "resultado" es null: no debemos mostrarlo como "Sano".
+    this.resultadoAnalisis = requiereRevision
+      ? 'Revisión manual'
+      : (respuesta?.resultado ?? respuesta?.estado_uva ?? respuesta?.diagnostico ?? 'Pendiente');
+
+    this.confianzaAnalisis = typeof respuesta?.confianza === 'number'
+      ? respuesta.confianza
+      : (typeof respuesta?.analisis_ia?.confianza_pct === 'number'
+          ? respuesta.analisis_ia.confianza_pct
+          : undefined);
+
+    this.modeloAnalisis = respuesta?.modelo ?? respuesta?.analisis_ia?.modelo ?? undefined;
+    this.riesgoAnalisis = requiereRevision ? undefined : (respuesta?.riesgo ?? undefined);
+    this.temperaturaAnalisis = respuesta?.temperatura ?? undefined;
+    this.humedadAnalisis = respuesta?.humedad ?? undefined;
+  }
+
+  private informarErrorAnalisis(error: any): void {
+    if (error?.status === 0) {
+      this.errorAnalisis = 'No se pudo contactar al servidor. Comprueba tu conexión y la configuración CORS del backend.';
+    } else {
+      this.errorAnalisis = error?.error?.mensaje
+        ?? error?.error?.error
+        ?? 'No se pudo analizar la fotografía. Intenta nuevamente.';
+    }
+    this.resultadoAnalisis = undefined;
+  }
+
+  // ==========================================
   // SUBIR IMAGEN
   // ==========================================
 
@@ -474,6 +522,12 @@ export class HomePage implements OnInit, OnDestroy {
 
     }
 
+
+    this.errorAnalisis = undefined;
+    if (this.archivoSeleccionado.size > 8 * 1024 * 1024) {
+      this.errorAnalisis = 'La imagen supera el límite permitido de 8 MB.';
+      return;
+    }
 
     console.log(
       '📤 Archivo que se enviará:',
@@ -510,45 +564,9 @@ export class HomePage implements OnInit, OnDestroy {
           );
 
 
-          // ==========================================
-          // GUARDAR RESULTADO ML
-          // ==========================================
-
-          this.resultadoAnalisis =
-            respuesta.resultado;
-
-
-          this.confianzaAnalisis =
-            respuesta.confianza;
-
-
-          this.modeloAnalisis =
-            respuesta.modelo;
-
-
-          // ==========================================
-          // GUARDAR RIESGO
-          // ==========================================
-
-          this.riesgoAnalisis =
-            respuesta.riesgo;
-
-
-          // ==========================================
-          // GUARDAR TEMPERATURA
-          // ==========================================
-
-          this.temperaturaAnalisis =
-            respuesta.temperatura;
-
-
-          // ==========================================
-          // GUARDAR HUMEDAD
-          // ==========================================
-
-          this.humedadAnalisis =
-            respuesta.humedad;
-
+          // HTTP 200 y HTTP 202 llegan por "next" en HttpClient.
+          // Mostrar revisión manual sin convertirla en diagnóstico definitivo.
+          this.aplicarResultadoAnalisis(respuesta);
 
           console.log(
             '🍇 RESULTADO:',
@@ -624,6 +642,7 @@ export class HomePage implements OnInit, OnDestroy {
           );
 
 
+          this.informarErrorAnalisis(error);
           this.subiendo =
             false;
 
@@ -647,18 +666,14 @@ export class HomePage implements OnInit, OnDestroy {
         const rutaRelativa = respuesta.ruta || respuesta.ruta_imagen;
 
         this.fotoSeleccionada = this.telemetria.urlImagen(rutaRelativa);
-        this.resultadoAnalisis = respuesta.resultado;
-        this.confianzaAnalisis = respuesta.confianza;
-        this.modeloAnalisis = respuesta.modelo;
-        this.riesgoAnalisis = respuesta.riesgo;
-        this.temperaturaAnalisis = respuesta.temperatura;
-        this.humedadAnalisis = respuesta.humedad;
+        this.aplicarResultadoAnalisis(respuesta);
 
         this.subiendo = false;
         this.cargarImagenes();
       },
       error: (error) => {
         console.error('❌ Error solicitando captura a ESP32:', error);
+        this.informarErrorAnalisis(error);
         this.subiendo = false;
       }
     });

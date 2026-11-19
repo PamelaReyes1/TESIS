@@ -225,6 +225,11 @@
     </ion-card>
 
 
+    <!-- Mensaje de error cuando falla la petición HTTP. -->
+    <div *ngIf="errorAnalisis" class="aviso-inferencia aviso-inferencia-error" role="alert">
+      ⚠️ {{ errorAnalisis }}
+    </div>
+
     <!-- ========================================== -->
     <!-- RESULTADO DEL ÚLTIMO ANÁLISIS -->
     <!-- ========================================== -->
@@ -263,6 +268,13 @@
 
         </div>
 
+
+        <!-- HTTP 202: resultado null y revisión manual requerida. -->
+        <div *ngIf="estadoDecision === 'revision_manual'" class="aviso-inferencia aviso-inferencia-revision" role="status">
+          <strong>⚠️ Clasificación no concluyente</strong>
+          <p>La imagen requiere revisión manual. No se registró un diagnóstico definitivo en MySQL.</p>
+          <p *ngIf="clasePropuesta">Clase propuesta: <strong>{{ clasePropuesta }}</strong>.</p>
+        </div>
 
         <!-- CONFIANZA -->
 
@@ -375,7 +387,9 @@
             ? '🔴'
             : riesgoAnalisis === 'Medio'
             ? '🟡'
-            : '🟢'
+            : riesgoAnalisis === 'Bajo'
+            ? '🟢'
+            : '⚪'
             }}
 
           </span>

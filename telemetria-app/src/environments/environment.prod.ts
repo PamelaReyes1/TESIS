@@ -1,4 +1,4 @@
 export const environment = {
   production: true,
-  apiUrl: 'https://api-TUCUENTA.alwaysdata.net'
+  apiUrl: 'https://api-tesis-pamela.onrender.com'
 };
