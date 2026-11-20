@@ -21,7 +21,7 @@ async function guardarDiagnostico(pool, { bytes, mime, resultadoIA, calcularRies
     let humedad = null;
     let riesgo = null;
     // Solo asociar una medición REAL cuando se active expresamente esta opción.
-    if (asociarMedicion && !revision) {
+    if (asociarMedicion) {
       const [mediciones] = await conexion.query(`
         SELECT id_medicion, temperatura, humedad
         FROM mediciones ORDER BY fecha_hora DESC LIMIT 1
@@ -34,7 +34,9 @@ async function guardarDiagnostico(pool, { bytes, mime, resultadoIA, calcularRies
           idMedicion = medicion.id_medicion;
           temperatura = t;
           humedad = h;
-          riesgo = calcularRiesgo(t, h, resultadoIA.resultadoBD);
+          riesgo = revision
+            ? null
+            : calcularRiesgo(t, h, resultadoIA.resultadoBD);
         }
       }
     }

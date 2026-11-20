@@ -1,0 +1,10 @@
+En Render (api-tesis-pamela > Environment), crear dos variables PRIVADAS:
+IOT_NODEMCU_KEY=<una clave aleatoria distinta de al menos 32 caracteres>
+IOT_CAMARA_KEY=<otra clave aleatoria distinta de al menos 32 caracteres>
+
+No subir valores reales al repositorio. Firmware NodeMCU y ESP32-CAM:
+const char* DEVICE_KEY = "<correspondiente clave de Render>";
+
+Generar valores aleatorios nuevos, por ejemplo en PowerShell:
+[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+Repetir la orden para obtener dos claves diferentes. Se recomienda cambiar las claves Wi-Fi previamente expuestas.
