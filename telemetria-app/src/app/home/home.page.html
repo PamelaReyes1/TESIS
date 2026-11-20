@@ -35,7 +35,7 @@
       <div class="estado-sistema">
 
         <span>
-          🟢
+          {{ ultimaMedicion ? '🟢' : '🟡' }}
         </span>
 
         <div>
@@ -45,7 +45,7 @@
           </small>
 
           <strong>
-            Operativo
+            {{ ultimaMedicion ? 'Mediciones recibidas' : 'Esperando lecturas del sensor' }}
           </strong>
 
         </div>
@@ -132,6 +132,9 @@
 
     </div>
 
+    <p *ngIf="ultimaMedicion" class="ultima-lectura">
+      Última lectura registrada: {{ ultimaMedicion.fecha_hora || 'Sin fecha' }}
+    </p>
 
     <!-- ========================================== -->
     <!-- SECCIÓN DE ANÁLISIS -->
@@ -156,10 +159,14 @@
 
 
 
-        <!-- BOTÓN CÁMARA ESP32-CAM -->
-        <ion-button expand="block" shape="round" color="success" (click)="capturarFotoESP32()" [disabled]="subiendo">
-          {{ subiendo ? '⏳ Capturando y analizando...' : '📷 Capturar foto desde ESP32-CAM' }}
+        <!-- ESP32-CAM publica fotos automáticamente en la nube -->
+        <ion-button expand="block" shape="round" color="success" (click)="actualizarFotosESP32()" [disabled]="subiendo">
+          🔄 Actualizar fotos de ESP32-CAM
         </ion-button>
+        <p class="nota-camara">
+          La ESP32-CAM envía fotos automáticamente por Wi-Fi. Este botón actualiza el historial;
+          no solicita una nueva captura. El control remoto requiere una función adicional en el backend.
+        </p>
         <!-- BOTÓN CÁMARA -->
 
         <ion-button expand="block" shape="round" (click)="tomarFoto()">
@@ -269,11 +276,10 @@
         </div>
 
 
-        <!-- HTTP 202: fotografía guardada, sin diagnóstico definitivo. -->
+        <!-- HTTP 202: resultado null y revisión manual requerida. -->
         <div *ngIf="estadoDecision === 'revision_manual'" class="aviso-inferencia aviso-inferencia-revision" role="status">
           <strong>⚠️ Clasificación no concluyente</strong>
-          <p *ngIf="persistidoAnalisis">La fotografía y el análisis están guardados en el historial. El diagnóstico sigue pendiente de revisión.</p>
-          <p *ngIf="!persistidoAnalisis">La fotografía requiere revisión manual. No existe un diagnóstico confirmado.</p>
+          <p>La imagen requiere revisión manual. No se registró un diagnóstico definitivo en MySQL.</p>
           <p *ngIf="clasePropuesta">Clase propuesta: <strong>{{ clasePropuesta }}</strong>.</p>
         </div>
 
@@ -340,7 +346,7 @@
             </small>
 
             <strong>
-              {{ temperaturaAnalisis ?? ultimaMedicion?.temperatura ?? '--' }} °C
+              {{ temperaturaAnalisis ?? '--' }} °C
             </strong>
 
           </div>
@@ -363,7 +369,7 @@
             </small>
 
             <strong>
-              {{ humedadAnalisis ?? ultimaMedicion?.humedad ?? '--' }} %
+              {{ humedadAnalisis ?? '--' }} %
             </strong>
 
           </div>
@@ -423,11 +429,11 @@
     <div class="titulo-seccion">
 
       <h2>
-        📷 Historial de diagnósticos
+        📊 Historial de monitoreo
       </h2>
 
       <p>
-        Fotografías analizadas y guardadas, incluso las que requieren revisión manual
+        Últimas imágenes registradas y su estimación de riesgo
       </p>
 
     </div>
@@ -448,7 +454,7 @@
       </h3>
 
       <p>
-        Sube una fotografía para ver su diagnóstico aquí.
+        Las fotografías enviadas por la ESP32-CAM aparecerán aquí automáticamente.
       </p>
 
     </div>
@@ -486,11 +492,12 @@
 
           <!-- ESTADO -->
 
-          <span class="estado" [class.pendiente]="imagen.estado_decision === 'revision_manual' || !imagen.resultado">
+          <span class="estado" [class.pendiente]="!imagen.resultado">
 
             {{
-            imagen.resultado
-            || 'Pendiente'
+            imagen.estado_decision === 'revision_manual'
+                ? 'Revisión manual'
+                : (imagen.resultado || 'Pendiente')
             }}
 
           </span>
@@ -505,19 +512,13 @@
 
       <ion-card-content>
 
-        <div *ngIf="imagen.estado_decision === 'revision_manual'" class="aviso-inferencia aviso-inferencia-revision" role="status">
-          <strong>⚠️ Revisión manual</strong>
-          <p>La imagen se guardó. El diagnóstico todavía no es definitivo.</p>
-          <p *ngIf="imagen.clase_propuesta">Clase propuesta por la IA: <strong>{{ imagen.clase_propuesta }}</strong>.</p>
-        </div>
-
 
         <div class="datos-imagen">
 
 
           <!-- TEMPERATURA -->
 
-          <div class="dato" *ngIf="imagen.temperatura != null">
+          <div class="dato">
 
             <span class="dato-icono">
               🌡️
@@ -547,7 +548,7 @@
 
           <!-- HUMEDAD -->
 
-          <div class="dato" *ngIf="imagen.humedad != null">
+          <div class="dato">
 
             <span class="dato-icono">
               💧
@@ -592,8 +593,9 @@
               <strong>
 
                 {{
-                imagen.resultado
-                || 'Pendiente'
+                imagen.estado_decision === 'revision_manual'
+                ? 'Revisión manual'
+                : (imagen.resultado || 'Pendiente')
                 }}
 
               </strong>
@@ -675,7 +677,7 @@
 
         <div *ngIf="!imagen.riesgo" class="riesgo-pendiente">
 
-          ⚪ Riesgo ambiental no estimado (sin sensor conectado)
+          {{ imagen.estado_decision === 'revision_manual' ? '⚪ Diagnóstico pendiente de revisión manual' : '⚪ Riesgo pendiente de análisis' }}
 
         </div>
 

@@ -104,6 +104,7 @@ export class HomePage implements OnInit, OnDestroy {
   // ==========================================
 
   intervaloActualizacion: any;
+  contadorRefrescos: number = 0;
 
   // ==========================================
   // CONSTRUCTOR
@@ -138,6 +139,13 @@ export class HomePage implements OnInit, OnDestroy {
         );
 
         this.cargarMediciones();
+        this.contadorRefrescos++;
+
+        // Cada 30 segundos renovar el historial para mostrar
+        // las fotos que ESP32-CAM haya enviado por HTTPS.
+        if (this.contadorRefrescos % 3 === 0) {
+          this.cargarImagenes();
+        }
 
       }, 10000);
 
@@ -236,11 +244,15 @@ export class HomePage implements OnInit, OnDestroy {
             datos.length > 0
           ) {
 
-            // El endpoint devuelve las mediciones
-            // ordenadas de más reciente a más antigua
-
-            this.ultimaMedicion =
-              datos[0];
+            // El backend invierte el resultado SQL y devuelve las
+            // mediciones ASCENDENTES. Usar el ID mas alto es fiable
+            // incluso si cambia el orden de la respuesta.
+            this.ultimaMedicion = datos.reduce(
+              (masReciente: any, medicion: any) =>
+                Number(medicion.id_medicion) > Number(masReciente.id_medicion)
+                  ? medicion : masReciente,
+              datos[0]
+            );
 
 
             console.log(
@@ -652,32 +664,14 @@ export class HomePage implements OnInit, OnDestroy {
 
   }
   // ==========================================
-  // CAPTURAR FOTO CON ESP32-CAM REMOTA
+  // VER FOTOGRAFIAS ENVIADAS POR ESP32-CAM
+  // No activa el obturador: la camara envía fotos a Render.
+  // Para disparo remoto se necesitara una cola de ordenes
+  // y un endpoint que la ESP32-CAM consulte por HTTPS.
   // ==========================================
-  capturarFotoESP32() {
-    console.log('📸 Solicitando captura a la ESP32-CAM...');
-    this.subiendo = true;
-
-    this.telemetria.capturarDesdeESP32().subscribe({
-      next: (respuesta) => {
-        console.log('✅ Foto recibida y analizada:', respuesta);
-
-        // Usar respuesta.ruta (con fallback a respuesta.ruta_imagen por si acaso)
-        const rutaRelativa = respuesta.ruta || respuesta.ruta_imagen;
-
-        this.fotoSeleccionada = this.telemetria.urlImagen(rutaRelativa);
-        this.aplicarResultadoAnalisis(respuesta);
-
-        this.subiendo = false;
-        this.cargarImagenes();
-      },
-      error: (error) => {
-        console.error('❌ Error solicitando captura a ESP32:', error);
-        this.informarErrorAnalisis(error);
-        this.subiendo = false;
-      }
-    });
-
+  actualizarFotosESP32(): void {
+    console.log('🔄 Actualizando historial de la ESP32-CAM...');
+    this.cargarImagenes();
+    this.cargarMediciones();
   }
 }
-

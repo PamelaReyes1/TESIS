@@ -693,3 +693,17 @@ grid-template-columns:1fr;
   color: #8a1c1c;
   border: 1px solid #e4aaaa;
 }
+
+/* Estado y sincronización del hardware IoT */
+.ultima-lectura {
+  margin: -8px 0 20px;
+  text-align: center;
+  color: #52655a;
+  font-size: 13px;
+}
+.nota-camara {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #59645e;
+  margin: 8px 4px 15px;
+}

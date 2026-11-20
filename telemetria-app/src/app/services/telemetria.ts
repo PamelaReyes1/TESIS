@@ -34,15 +34,15 @@ export class Telemetria {
   // OBTENER IMÁGENES DEL SERVIDOR
   // ==========================================
 
-  obtenerDatos(): Observable<any> {
+  obtenerDatos(): Observable<any[]> {
 
     console.log(
       '🌐 Consultando imágenes:',
-      `${this.apiUrl}/imagenes`
+      `${this.apiUrl}/imagenes/`
     );
 
-    return this.http.get(
-      `${this.apiUrl}/imagenes`
+    return this.http.get<any[]>(
+      `${this.apiUrl}/imagenes/`
     );
 
   }
