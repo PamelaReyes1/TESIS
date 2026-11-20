@@ -4,7 +4,7 @@ const cors = require("cors");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const { randomUUID } = require("node:crypto");
+const { randomUUID, timingSafeEqual } = require("node:crypto");
 const { detectarMime } = require("./services/inferenceClient");
 const { guardarDiagnostico, normalizarHistorial } = require("./services/diagnosticosRepository");
 const {
@@ -18,6 +18,37 @@ const axios = require('axios');
 require("dotenv").config();
 
 const app = express();
+
+// =====================================================
+// AUTENTICACION DE DISPOSITIVOS IOT (HTTPS + X-Device-Key)
+// =====================================================
+// Variables PRIVADAS en Render:
+// IOT_NODEMCU_KEY e IOT_CAMARA_KEY (minimo 32 caracteres aleatorios).
+// En ausencia de una variable el acceso se DENIEGA (HTTP 503).
+function verificarDispositivo(variableEntorno) {
+    return (req, res, next) => {
+        const claveEsperada = process.env[variableEntorno];
+        if (typeof claveEsperada !== 'string' || Buffer.byteLength(claveEsperada, 'utf8') < 32) {
+            return res.status(503).json({ mensaje: 'Autenticacion IoT no configurada en el servidor' });
+        }
+
+        const claveRecibida = req.get('X-Device-Key') || '';
+        if (typeof claveRecibida !== 'string') {
+            return res.status(401).json({ mensaje: 'Dispositivo no autorizado' });
+        }
+
+        const recibida = Buffer.from(claveRecibida, 'utf8');
+        const esperada = Buffer.from(claveEsperada, 'utf8');
+        if (recibida.length !== esperada.length || !timingSafeEqual(recibida, esperada)) {
+            return res.status(401).json({ mensaje: 'Dispositivo no autorizado' });
+        }
+
+        next();
+    };
+}
+
+const validarNodeMCU = verificarDispositivo('IOT_NODEMCU_KEY');
+const validarCamara = verificarDispositivo('IOT_CAMARA_KEY');
 
 // =====================================================
 // CONFIGURACIÓN GENERAL
@@ -421,7 +452,7 @@ app.post('/imagenes-subir', upload.single('imagen'), async (req, res) => {
 });
 
 // Compatibilidad con ESP32-CAM: JPEG binario sin multipart.
-app.post('/imagenes-directa', express.raw({ type: 'image/jpeg', limit: '8mb' }), async (req, res) => {
+app.post('/imagenes-directa', validarCamara, express.raw({ type: 'image/jpeg', limit: '8mb' }), async (req, res) => {
     if (!Buffer.isBuffer(req.body) || !req.body.length) {
         return res.status(400).json({ mensaje: 'No se recibió ninguna imagen JPEG' });
     }
@@ -516,134 +547,47 @@ app.get(
 // GUARDAR MEDICIONES NODEMCU
 // =====================================================
 
-app.post(
+app.post('/mediciones', validarNodeMCU, (req, res) => {
+    const datos = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+        ? req.body : {};
+    const { id_sensor, temperatura, humedad } = datos;
 
-    "/mediciones",
+    // No aceptar campos faltantes ni valores NaN, Infinity o numeros fuera de rango.
+    const sensor = Number(id_sensor);
+    const temp = Number(temperatura);
+    const hum = Number(humedad);
+    const valido = id_sensor !== undefined && id_sensor !== null && id_sensor !== ''
+        && temperatura !== undefined && temperatura !== null && temperatura !== ''
+        && humedad !== undefined && humedad !== null && humedad !== ''
+        && Number.isSafeInteger(sensor) && sensor > 0
+        && Number.isFinite(temp) && temp >= -40 && temp <= 85
+        && Number.isFinite(hum) && hum >= 0 && hum <= 100;
 
-    (req, res) => {
-
-
-        const {
-
-            id_sensor,
-
-            temperatura,
-
-            humedad
-
-        } = req.body;
-
-
-        console.log(
-            "📡 Datos recibidos del sensor:"
-        );
-
-
-        console.log(
-            req.body
-        );
-
-
-        // =================================================
-        // VALIDAR
-        // =================================================
-
-        if (
-            id_sensor === undefined ||
-            temperatura === undefined ||
-            humedad === undefined
-        ) {
-
-            return res.status(400).json({
-
-                mensaje:
-                    "Faltan datos del sensor"
-
-            });
-
-        }
-
-
-        // =================================================
-        // SQL
-        // =================================================
-
-        const sql = `
-
-            INSERT INTO mediciones
-
-            (
-                id_sensor,
-                temperatura,
-                humedad
-            )
-
-            VALUES (?, ?, ?)
-
-        `;
-
-
-        db.query(
-
-            sql,
-
-            [
-
-                id_sensor,
-
-                temperatura,
-
-                humedad
-
-            ],
-
-            (err, result) => {
-
-
-                if (err) {
-
-                    console.log(
-                        "❌ Error guardando medición:",
-                        err
-                    );
-
-
-                    return res.status(500).json({
-
-                        mensaje:
-                            "Error al guardar la medición",
-
-                        error:
-                            err.message
-
-                    });
-
-                }
-
-
-                console.log(
-                    "✅ Medición guardada correctamente"
-                );
-
-
-                return res.json({
-
-                    mensaje:
-                        "Medición guardada correctamente",
-
-                    id:
-                        result.insertId
-
-                });
-
-            }
-
-        );
-
+    if (!valido) {
+        return res.status(400).json({
+            mensaje: 'Datos invalidos: id_sensor debe ser entero positivo; temperatura -40 a 85 C; humedad 0 a 100 %'
+        });
     }
 
-);
+    // La tabla mediciones mantiene el contrato que ya consume Ionic.
+    const sql = 'INSERT INTO mediciones (id_sensor, temperatura, humedad) VALUES (?, ?, ?)';
+    db.query(sql, [sensor, temp, hum], (err, result) => {
+        if (err) {
+            if (err.code === 'ER_NO_REFERENCED_ROW_2' || err.code === 'ER_NO_REFERENCED_ROW') {
+                return res.status(422).json({
+                    mensaje: 'id_sensor no registrado en la tabla sensores'
+                });
+            }
+            console.error('Error guardando medicion IoT:', err.code || err.message);
+            return res.status(500).json({ mensaje: 'Error al guardar la medicion' });
+        }
 
+        return res.status(200).json({
+            mensaje: 'Medicion guardada correctamente',
+            id: result.insertId
+        });
+    });
+});
 
 // =====================================================
 // CONSULTAR MEDICIONES
