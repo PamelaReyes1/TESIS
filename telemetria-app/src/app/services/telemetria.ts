@@ -135,8 +135,14 @@ export class Telemetria {
     );
 
   }
+  // Encola una orden de captura; no requiere IP LAN de ESP32-CAM.
   capturarDesdeESP32(): Observable<any> {
-    return this.http.post(`${this.apiUrl}/capturar-esp32`, {});
+    return this.http.post<any>(`${this.apiUrl}/capturar-esp32`, {});
+  }
+
+  // Consulta el resultado de la orden para actualizar el historial.
+  estadoCapturaESP32(idOrden: number): Observable<any> {
+    return this.http.get<any>(`${this.apiUrl}/capturar-esp32/estado/${idOrden}`);
   }
 }
 

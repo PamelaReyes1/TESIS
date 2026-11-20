@@ -99,6 +99,13 @@ export class HomePage implements OnInit, OnDestroy {
 
   subiendo: boolean = false;
 
+  // Solo captura la ESP32-CAM cuando el usuario pulsa el boton.
+  capturandoRemoto: boolean = false;
+  estadoCapturaRemota: string | undefined;
+  errorCapturaRemota: string | undefined;
+  intervaloEstadoCaptura: any;
+  idOrdenCaptura: number | undefined;
+
   // ==========================================
   // TEMPORIZADOR
   // ==========================================
@@ -158,6 +165,11 @@ export class HomePage implements OnInit, OnDestroy {
 
   ngOnDestroy() {
 
+
+    if (this.intervaloEstadoCaptura) {
+      clearInterval(this.intervaloEstadoCaptura);
+      this.intervaloEstadoCaptura = undefined;
+    }
 
     if (
       this.intervaloActualizacion
@@ -288,7 +300,7 @@ export class HomePage implements OnInit, OnDestroy {
   // TOMAR FOTO
   // ==========================================
 
-  async tomarFoto() {
+  async tomarFotoLocal() {
 
 
     try {
@@ -664,14 +676,118 @@ export class HomePage implements OnInit, OnDestroy {
 
   }
   // ==========================================
-  // VER FOTOGRAFIAS ENVIADAS POR ESP32-CAM
-  // No activa el obturador: la camara envía fotos a Render.
-  // Para disparo remoto se necesitara una cola de ordenes
-  // y un endpoint que la ESP32-CAM consulte por HTTPS.
+  // CAPTURA REMOTA: boton del front -> MariaDB -> ESP32-CAM
   // ==========================================
+  tomarFoto(): void {
+    if (this.capturandoRemoto || this.subiendo) return;
+
+    this.errorCapturaRemota = undefined;
+    this.estadoCapturaRemota = 'Enviando orden a la ESP32-CAM...';
+    this.capturandoRemoto = true;
+    this.idOrdenCaptura = undefined;
+
+    this.telemetria.capturarDesdeESP32().subscribe({
+      next: (respuesta: any) => {
+        const id = Number(respuesta?.id_orden);
+        if (!Number.isSafeInteger(id) || id < 1) {
+          this.capturandoRemoto = false;
+          this.errorCapturaRemota = 'El servidor no devolvio una orden valida.';
+          return;
+        }
+        this.idOrdenCaptura = id;
+        this.estadoCapturaRemota = 'Esperando fotografia de la ESP32-CAM...';
+        this.iniciarSeguimientoDeCaptura(id);
+      },
+      error: (err: any) => {
+        this.capturandoRemoto = false;
+        this.estadoCapturaRemota = undefined;
+        this.errorCapturaRemota = err?.error?.mensaje || 'No se pudo solicitar la captura remota.';
+      }
+    });
+  }
+
+  private iniciarSeguimientoDeCaptura(id: number): void {
+    if (this.intervaloEstadoCaptura) clearInterval(this.intervaloEstadoCaptura);
+    const inicio = Date.now();
+    let consultando = false;
+    const consultar = () => {
+      if (consultando) return;
+      consultando = true;
+      this.telemetria.estadoCapturaESP32(id).subscribe({
+        next: (r: any) => {
+          consultando = false;
+          if (r?.estado === 'completada') {
+            this.finalizarSeguimiento();
+            this.estadoCapturaRemota = `Fotografia #${r.id_imagen} guardada y analizada.`;
+            this.cargarImagenCapturada(Number(r.id_imagen));
+            this.cargarMediciones();
+            return;
+          }
+          if (r?.estado === 'fallida' || r?.estado === 'expirada') {
+            this.finalizarSeguimiento();
+            this.estadoCapturaRemota = undefined;
+            this.errorCapturaRemota = r?.mensaje_error || 'No se pudo completar la captura.';
+            return;
+          }
+          if (r?.estado === 'procesando' || r?.estado === 'recibida') {
+            this.estadoCapturaRemota = 'Camara activada; procesando imagen con IA...';
+          }
+          if (Date.now() - inicio > 8 * 60 * 1000) {
+            this.finalizarSeguimiento();
+            this.estadoCapturaRemota = 'La captura sigue en proceso. Consulta el historial para ver si finalizo.';
+          }
+        },
+        error: () => {
+          consultando = false;
+          // Una consulta puede fallar cuando Render despierta: mantener seguimiento.
+          if (Date.now() - inicio > 8 * 60 * 1000) {
+            this.finalizarSeguimiento();
+            this.errorCapturaRemota = 'No se pudo consultar el estado de la captura.';
+          }
+        }
+      });
+    };
+    consultar();
+    this.intervaloEstadoCaptura = setInterval(consultar, 4000);
+  }
+
+  private cargarImagenCapturada(idImagen: number): void {
+    this.telemetria.obtenerDatos().subscribe({
+      next: (fotos: any[]) => {
+        this.imagenes = fotos;
+        const nueva = fotos.find(f => Number(f.id_imagen) === idImagen);
+        if (nueva) {
+          this.aplicarResultadoAnalisis({
+            estado_decision: nueva.estado_decision,
+            clase_propuesta: nueva.clase_propuesta,
+            persistido: true,
+            resultado: nueva.resultado,
+            estado_uva: nueva.estado_uva,
+            confianza: nueva.confianza,
+            modelo: nueva.modelo_cnn,
+            riesgo: nueva.riesgo,
+            temperatura: nueva.temperatura,
+            humedad: nueva.humedad,
+            mensaje: 'Fotografia de ESP32-CAM guardada correctamente'
+          });
+        }
+      },
+      error: () => this.cargarImagenes()
+    });
+  }
+
+  private finalizarSeguimiento(): void {
+    if (this.intervaloEstadoCaptura) {
+      clearInterval(this.intervaloEstadoCaptura);
+      this.intervaloEstadoCaptura = undefined;
+    }
+    this.capturandoRemoto = false;
+  }
+
+  // Actualiza la lista sin tomar una fotografia nueva.
   actualizarFotosESP32(): void {
-    console.log('🔄 Actualizando historial de la ESP32-CAM...');
     this.cargarImagenes();
     this.cargarMediciones();
   }
+
 }

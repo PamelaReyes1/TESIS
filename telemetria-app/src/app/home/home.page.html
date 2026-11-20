@@ -159,22 +159,26 @@
 
 
 
-        <!-- ESP32-CAM publica fotos automáticamente en la nube -->
-        <ion-button expand="block" shape="round" color="success" (click)="actualizarFotosESP32()" [disabled]="subiendo">
-          🔄 Actualizar fotos de ESP32-CAM
+        <!-- Captura remota: crea una orden para ESP32-CAM en Render -->
+        <ion-button expand="block" shape="round" color="success"
+                    (click)="tomarFoto()" [disabled]="capturandoRemoto || subiendo">
+          {{ capturandoRemoto ? '⏳ Esperando ESP32-CAM...' : '📷 Tomar foto con ESP32-CAM' }}
         </ion-button>
-        <p class="nota-camara">
-          La ESP32-CAM envía fotos automáticamente por Wi-Fi. Este botón actualiza el historial;
-          no solicita una nueva captura. El control remoto requiere una función adicional en el backend.
+        <p *ngIf="estadoCapturaRemota" class="nota-camara" role="status">
+          {{ estadoCapturaRemota }}
         </p>
-        <!-- BOTÓN CÁMARA -->
+        <p *ngIf="errorCapturaRemota" class="aviso-inferencia aviso-inferencia-error" role="alert">
+          ⚠️ {{ errorCapturaRemota }}
+        </p>
+        <p class="nota-camara">
+          La ESP32-CAM solo enviara fotografias cuando pulses este boton.
+          Puedes utilizar la camara del dispositivo como alternativa manual.
+        </p>
 
-        <ion-button expand="block" shape="round" (click)="tomarFoto()">
-
-          📷 Tomar / Seleccionar foto
-
+        <ion-button expand="block" shape="round" (click)="tomarFotoLocal()"
+                    [disabled]="subiendo || capturandoRemoto">
+          📱 Tomar o seleccionar foto desde este dispositivo
         </ion-button>
-
 
         <!-- SELECCIONAR ARCHIVO -->
 
@@ -454,7 +458,7 @@
       </h3>
 
       <p>
-        Las fotografías enviadas por la ESP32-CAM aparecerán aquí automáticamente.
+        Las fotos de ESP32-CAM aparecerán aquí después de pulsar «Tomar foto».
       </p>
 
     </div>

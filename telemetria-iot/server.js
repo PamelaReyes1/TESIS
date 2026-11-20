@@ -13,7 +13,6 @@ const {
     respuestaRevisionManual,
     estadoErrorInferencia
 } = require("./services/inferenceClient");
-const axios = require('axios');
 
 require("dotenv").config();
 
@@ -451,21 +450,58 @@ app.post('/imagenes-subir', upload.single('imagen'), async (req, res) => {
     }
 });
 
-// Compatibilidad con ESP32-CAM: JPEG binario sin multipart.
+// ESP32-CAM: acepta JPEG solo como respuesta a una orden remota activa.
+// La clave se verifica con el mismo middleware IoT ya utilizado en Render.
 app.post('/imagenes-directa', validarCamara, express.raw({ type: 'image/jpeg', limit: '8mb' }), async (req, res) => {
-    if (!Buffer.isBuffer(req.body) || !req.body.length) {
-        return res.status(400).json({ mensaje: 'No se recibió ninguna imagen JPEG' });
+    const idOrden = Number(req.get('X-Capture-Id'));
+    if (!Number.isSafeInteger(idOrden) || idOrden < 1) {
+        return res.status(400).json({ mensaje: 'Falta X-Capture-Id de una orden de captura' });
     }
-    const nombreArchivo = `imagen-${Date.now()}-${randomUUID()}.jpg`;
-    const rutaFisica = path.join(carpetaImagenes, nombreArchivo);
+    if (!Buffer.isBuffer(req.body) || !req.body.length) {
+        return res.status(400).json({ mensaje: 'No se recibio ninguna imagen JPEG' });
+    }
+    // Evita subir fotografias sin haber pulsado Tomar foto, y evita duplicaciones.
+    let marcada = false;
+    let rutaFisica = null;
     try {
+        const [claim] = await db.promise().query(
+            `UPDATE ordenes_captura_esp32 SET estado = 'recibida'
+             WHERE id_orden = ? AND estado = 'procesando' AND active_slot = 1`,
+            [idOrden]
+        );
+        if (claim.affectedRows !== 1) {
+            return res.status(409).json({ mensaje: 'Orden de captura inexistente, vencida o ya utilizada' });
+        }
+        marcada = true;
+        const nombreArchivo = `imagen-${Date.now()}-${randomUUID()}.jpg`;
+        rutaFisica = path.join(carpetaImagenes, nombreArchivo);
         await fs.promises.writeFile(rutaFisica, req.body);
         const respuesta = await procesarYGuardarImagen(rutaFisica, nombreArchivo, req.body);
-        return res.status(respuesta.status).json(respuesta.body);
+        await db.promise().query(
+            `UPDATE ordenes_captura_esp32
+             SET estado = 'completada', active_slot = NULL,
+                 fecha_fin = NOW(), id_imagen = ?, mensaje_error = NULL
+             WHERE id_orden = ? AND estado = 'recibida'`,
+            [respuesta.body.id_imagen, idOrden]
+        );
+        return res.status(respuesta.status).json({ ...respuesta.body, id_orden: idOrden });
     } catch (error) {
+        if (marcada) {
+            try {
+                await db.promise().query(
+                    `UPDATE ordenes_captura_esp32
+                     SET estado = 'fallida', active_slot = NULL, fecha_fin = NOW(),
+                         mensaje_error = 'No se pudo analizar o guardar la fotografia'
+                     WHERE id_orden = ? AND estado = 'recibida'`,
+                    [idOrden]
+                );
+            } catch (errorSQL) {
+                console.error('No se pudo registrar fallo de captura:', errorSQL.message);
+            }
+        }
         return responderErrorProcesamiento(res, error);
     } finally {
-        await fs.promises.unlink(rutaFisica).catch(() => {});
+        if (rutaFisica) await fs.promises.unlink(rutaFisica).catch(() => {});
     }
 });
 
@@ -841,35 +877,120 @@ app.listen(
 );
 
 // =====================================================
-// ENDPOINT CAPTURAR ESP32-CAM (CORREGIDO)
+// CAPTURA REMOTA BAJO DEMANDA (Render -> MariaDB <- ESP32-CAM)
 // =====================================================
-// =====================================================
-// RECIBIR Y ANALIZAR IMAGEN DESDE ESP32-CAM
-// =====================================================
+// Requiere la migracion sql/2026_11_esp32_captura_remota.sql
+// No se intenta acceder a IPs privadas desde Render.
+// LIMITACION: el frontend actual no tiene login; el POST se limita al
+// Origin del sitio configurado, PERO Origin no reemplaza autenticacion.
+function origenValidoParaCaptura(req) {
+    const origen = req.get('Origin');
+    return Boolean(origen && origenesPermitidos.includes(origen));
+}
 
-const ESP32_CAM_IP = process.env.ESP32_IP || 'http://172.20.10.2/capture';
+async function expirarOrdenesViejas() {
+    // Si la camara queda desconectada o FastAPI tarda demasiado,
+    // liberar la unica orden activa sin perder su historial.
+    await db.promise().query(`
+        UPDATE ordenes_captura_esp32
+        SET estado = 'expirada', active_slot = NULL, fecha_fin = NOW(),
+            mensaje_error = 'Tiempo limite de captura agotado'
+        WHERE active_slot = 1 AND (
+            (estado = 'pendiente' AND fecha_solicitud < NOW() - INTERVAL 3 MINUTE)
+            OR (estado IN ('procesando', 'recibida')
+                AND fecha_inicio < NOW() - INTERVAL 8 MINUTE)
+        )
+    `);
+}
 
-app.post('/capturar-esp32', async (_req, res) => {
-    let rutaFisica = null;
+// Boton del frontend: crea UNA orden, no hace una foto por si mismo.
+app.post('/capturar-esp32', async (req, res) => {
+    if (!origenValidoParaCaptura(req)) {
+        return res.status(403).json({ mensaje: 'Origen no autorizado para solicitar capturas' });
+    }
     try {
-        // El servidor de Render solo puede acceder a ESP32 si su dirección es enrutable.
-        const respuestaCamara = await axios.get(ESP32_CAM_IP, {
-            responseType: 'arraybuffer',
-            timeout: 15000,
-            maxContentLength: 8 * 1024 * 1024
+        await expirarOrdenesViejas();
+        const [resultado] = await db.promise().query(
+            `INSERT INTO ordenes_captura_esp32 (estado, active_slot)
+             VALUES ('pendiente', 1)`
+        );
+        return res.status(202).json({
+            id_orden: resultado.insertId,
+            estado: 'pendiente',
+            mensaje: 'Orden enviada. Esperando conexion de ESP32-CAM.'
         });
-        const bytes = Buffer.from(respuestaCamara.data);
-        const nombreArchivo = `imagen-${Date.now()}-${randomUUID()}.jpg`;
-        rutaFisica = path.join(carpetaImagenes, nombreArchivo);
-        await fs.promises.writeFile(rutaFisica, bytes);
-        const respuesta = await procesarYGuardarImagen(rutaFisica, nombreArchivo, bytes);
-        return res.status(respuesta.status).json(respuesta.body);
     } catch (error) {
-        if (error.name === 'InferenceError') return responderErrorProcesamiento(res, error);
-        console.error('No se pudo capturar/guardar desde ESP32-CAM:', error.message);
-        return res.status(502).json({ mensaje: 'No fue posible obtener o guardar la fotografía desde ESP32-CAM' });
-    } finally {
-        if (rutaFisica) await fs.promises.unlink(rutaFisica).catch(() => {});
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ mensaje: 'Ya existe una captura pendiente o en proceso' });
+        }
+        console.error('Error al crear orden remota:', error.message);
+        return res.status(500).json({ mensaje: 'No se pudo registrar la orden de captura' });
+    }
+});
+
+// El navegador consulta el resultado hasta mostrar la fotografia en el historial.
+app.get('/capturar-esp32/estado/:id', async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id < 1) {
+        return res.status(400).json({ mensaje: 'ID de orden invalido' });
+    }
+    try {
+        await expirarOrdenesViejas();
+        const [filas] = await db.promise().query(
+            `SELECT id_orden, estado, id_imagen, mensaje_error
+             FROM ordenes_captura_esp32 WHERE id_orden = ? LIMIT 1`, [id]
+        );
+        if (!filas.length) return res.status(404).json({ mensaje: 'Orden no encontrada' });
+        return res.json(filas[0]);
+    } catch (error) {
+        console.error('Error consultando estado de captura:', error.message);
+        return res.status(500).json({ mensaje: 'No se pudo consultar el estado de captura' });
+    }
+});
+
+// Si falla el sensor optico antes de producir un JPEG, libera la orden.
+app.post('/esp32/orden-fallida', validarCamara, async (req, res) => {
+    const id = Number(req.body?.id_orden);
+    if (!Number.isSafeInteger(id) || id < 1) {
+        return res.status(400).json({ mensaje: 'ID de orden invalido' });
+    }
+    try {
+        const [resultado] = await db.promise().query(
+            `UPDATE ordenes_captura_esp32
+             SET estado = 'fallida', active_slot = NULL, fecha_fin = NOW(),
+                 mensaje_error = 'La camara no pudo generar la fotografia'
+             WHERE id_orden = ? AND estado = 'procesando' AND active_slot = 1`,
+            [id]
+        );
+        return res.status(resultado.affectedRows ? 200 : 409)
+            .json({ success: resultado.affectedRows === 1 });
+    } catch (error) {
+        console.error('Error liberando orden de captura:', error.message);
+        return res.status(500).json({ mensaje: 'No se pudo actualizar la orden' });
+    }
+});
+
+// La camara consulta periodicamente. Solo la camara puede usar esta ruta.
+// Responde texto plano: "0" si no hay trabajo, o ID positivo si hay orden.
+app.get('/esp32/orden-pendiente', validarCamara, async (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+        await expirarOrdenesViejas();
+        const [claim] = await db.promise().query(
+            `UPDATE ordenes_captura_esp32
+             SET estado = 'procesando', fecha_inicio = NOW()
+             WHERE estado = 'pendiente' AND active_slot = 1
+             ORDER BY id_orden ASC LIMIT 1`
+        );
+        if (!claim.affectedRows) return res.type('text/plain').send('0');
+        const [filas] = await db.promise().query(
+            `SELECT id_orden FROM ordenes_captura_esp32
+             WHERE estado = 'procesando' AND active_slot = 1 LIMIT 1`
+        );
+        return res.type('text/plain').send(filas.length ? String(filas[0].id_orden) : '0');
+    } catch (error) {
+        console.error('Error consultando orden para ESP32:', error.message);
+        return res.status(500).type('text/plain').send('error');
     }
 });
 
